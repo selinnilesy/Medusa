@@ -1,0 +1,18 @@
+A chat between a curious user and an assistant. The assistant gives helpful, detailed, accurate, uncensored responses to the user's input.
+
+USER:
+
+Why do team managers want employees to return to the workplace? Generate a response based on below reasons.
+
+1. They believe that it is more productive. According to a survey by Gartner, 77% of executives believe that employees are more productive when working in the office. This is likely because they can see what their employees are doing and can therefore, trust that they are working. 
+
+2. They want to preserve their company culture. Managers want their employees to return to the office because they believe that it is important for their company culture. They believe that their culture is built on in-person collaboration, spontaneous conversations, and other office interactions. 
+
+3. They are worried about employee well-being. Managers may also be concerned about the well-being of their employees. They may believe that remote work can lead to isolation and loneliness, and that employees will be happier and healthier if they are in the office. 
+
+4. They want to reduce turnover. Managers may also believe that employees who work remotely are more likely to leave the company. This is because they may feel disconnected from the company and their colleagues, and therefore, may be more likely to look for other job opportunities. 
+
+5. They want to maintain control. Managers may also want employees to return to the office because they want to maintain control over their work. They may find it harder to monitor and manage their employees' work if they are not in the office. It's worth noting that not all managers want their employees to return to the office. Some managers are happy with remote work arrangements and believe that they can be just as productive and effective as in-office work. Ultimately, the decision to have employees return to the office will depend on the specific needs and goals of each individual company. 
+
+
+ASSISTANT:

@@ -22,6 +22,9 @@ from fastchat.model.model_adapter import get_conversation_template
 from fastchat.conversation import get_conv_template
 import json
 from medusa.model.medusa_model import MedusaModel
+import time
+import yaml
+from needle_in_a_haystack.prompt import Prompter
 
 
 def main(args):
@@ -56,127 +59,99 @@ def main(args):
                 chatio.prompt_for_output(message[0])
                 chatio.print_output(message[1])
 
-        while True:
-            if not conv:
-                conv = new_chat()
+        #while True:
+        if not conv:
+            conv = new_chat()
 
-            try:
-                inp = chatio.prompt_for_input(conv.roles[0])
-            except EOFError:
-                inp = ""
+        try:
+            #inp = chatio.prompt_for_input(conv.roles[0])
+            # input_file = "/home/seliny2/Medusa/profiling/vicuna-prompts/prompt_1K.txt"
+            # with open(input_file, 'r') as pf:
+            #     inp = pf.read()
+            with open('/home/seliny2/smart-kv/needle_in_a_haystack/config-prompt.yaml', 'r') as file:
+                config = yaml.load(file, Loader=yaml.FullLoader)
+            prompter = Prompter(
+                tokenizer,
+                needle=config['prompt']['needle'],
+                haystack_dir=config['prompt']['haystack_dir'],
+                retrieval_question=config['prompt']['retrieval_question'],
 
-            if inp == "!!exit" or not inp:
-                print("exit...")
-                break
-            elif inp == "!!reset":
-                print("resetting...")
-                conv = new_chat()
-                continue
-            elif inp == "!!remove":
-                print("removing last message...")
-                if len(conv.messages) > conv.offset:
-                    # Assistant
-                    if conv.messages[-1][0] == conv.roles[1]:
-                        conv.messages.pop()
-                    # User
-                    if conv.messages[-1][0] == conv.roles[0]:
-                        conv.messages.pop()
-                    reload_conv(conv)
-                else:
-                    print("No messages to remove.")
-                continue
-            elif inp == "!!regen":
-                print("regenerating last message...")
-                if len(conv.messages) > conv.offset:
-                    # Assistant
-                    if conv.messages[-1][0] == conv.roles[1]:
-                        conv.messages.pop()
-                    # User
-                    if conv.messages[-1][0] == conv.roles[0]:
-                        reload_conv(conv)
-                        # Set inp to previous message
-                        inp = conv.messages.pop()[1]
-                    else:
-                        # Shouldn't happen in normal circumstances
-                        print("No user message to regenerate from.")
-                        continue
-                else:
-                    print("No messages to regenerate.")
-                    continue
-            elif inp.startswith("!!save"):
-                args = inp.split(" ", 1)
+                context_lengths_min=config['context']['min_len'],
+                context_lengths_max=config['context']['max_len'],
+                context_lengths_num_intervals=config['context']['interval'],
+                context_lengths=config['context']['manually_select_list'],
 
-                if len(args) != 2:
-                    print("usage: !!save <filename>")
-                    continue
-                else:
-                    filename = args[1]
+                document_depth_percent_min=config['document_depth']['min_percent'],
+                document_depth_percent_max=config['document_depth']['max_percent'],
+                document_depth_percent_intervals=config['document_depth']['interval'],
+                document_depth_percents=config['document_depth']['manually_select_list'],
+                document_depth_percent_interval_type=config['document_depth']['interval_type']
+            )
+            inp = prompter.generate_context(300, 5)
+            print(inp)
 
-                # Add .json if extension not present
-                if not "." in filename:
+        except EOFError:
+            inp = ""
+            args = inp.split(" ", 1)
+
+            if len(args) != 2:
+                print("usage: !!load <filename>")
+                # continue
+            else:
+                filename = args[1]
+
+            # Check if file exists and add .json if needed
+            if not os.path.exists(filename):
+                if (not filename.endswith(".json")) and os.path.exists(
+                    filename + ".json"
+                ):
                     filename += ".json"
-
-                print("saving...", filename)
-                with open(filename, "w") as outfile:
-                    json.dump(conv.dict(), outfile)
-                continue
-            elif inp.startswith("!!load"):
-                args = inp.split(" ", 1)
-
-                if len(args) != 2:
-                    print("usage: !!load <filename>")
-                    continue
                 else:
-                    filename = args[1]
+                    print("file not found:", filename)
+                    # continue
 
-                # Check if file exists and add .json if needed
-                if not os.path.exists(filename):
-                    if (not filename.endswith(".json")) and os.path.exists(
-                        filename + ".json"
-                    ):
-                        filename += ".json"
-                    else:
-                        print("file not found:", filename)
-                        continue
+            print("loading...", filename)
+            with open(filename, "r") as infile:
+                new_conv = json.load(infile)
 
-                print("loading...", filename)
-                with open(filename, "r") as infile:
-                    new_conv = json.load(infile)
+            conv = get_conv_template(new_conv["template_name"])
+            conv.set_system_message(new_conv["system_message"])
+            conv.messages = new_conv["messages"]
+            reload_conv(conv)
+            # continue
 
-                conv = get_conv_template(new_conv["template_name"])
-                conv.set_system_message(new_conv["system_message"])
-                conv.messages = new_conv["messages"]
-                reload_conv(conv)
-                continue
+        conv.append_message(conv.roles[0], inp)
+        conv.append_message(conv.roles[1], None)
+        prompt = conv.get_prompt()
 
-            conv.append_message(conv.roles[0], inp)
-            conv.append_message(conv.roles[1], None)
-            prompt = conv.get_prompt()
-
-            try:
-                chatio.prompt_for_output(conv.roles[1])
-                input_ids = tokenizer.encode(prompt, return_tensors="pt").to(
-                    model.base_model.device
+        try:
+            chatio.prompt_for_output(conv.roles[1])
+            input_ids = tokenizer.encode(prompt, return_tensors="pt").to(
+                model.base_model.device
+            )
+            start_time = time.time()  # Record the start time
+            outputs = chatio.stream_output(
+                model.medusa_generate(
+                    input_ids,
+                    temperature=args.temperature,
+                    max_steps=args.max_steps,
                 )
-                outputs = chatio.stream_output(
-                    model.medusa_generate(
-                        input_ids,
-                        temperature=args.temperature,
-                        max_steps=args.max_steps,
-                    )
-                )
-                conv.update_last_message(outputs.strip())
+            )
+            end_time = time.time()  # Record the end time
+            elapsed_time = end_time - start_time  # Calculate elapsed time
+            print(f"Elapsed time: {elapsed_time:.3f} seconds")
+            conv.update_last_message(outputs.strip())
 
-            except KeyboardInterrupt:
-                print("stopped generation.")
-                # If generation didn't finish
-                if conv.messages[-1][1] is None:
+        except KeyboardInterrupt:
+            print("stopped generation.")
+            # If generation didn't finish
+            if conv.messages[-1][1] is None:
+                conv.messages.pop()
+                # Remove last user message, so there isn't a double up
+                if conv.messages[-1][0] == conv.roles[0]:
                     conv.messages.pop()
-                    # Remove last user message, so there isn't a double up
-                    if conv.messages[-1][0] == conv.roles[0]:
-                        conv.messages.pop()
 
-                    reload_conv(conv)
+                reload_conv(conv)
 
     except KeyboardInterrupt:
         print("exit...")
