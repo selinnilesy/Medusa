@@ -25,6 +25,10 @@ from medusa.model.medusa_model import MedusaModel
 import time
 import yaml
 from needle_in_a_haystack.prompt import Prompter
+from torch.profiler import profile, record_function, ProfilerActivity
+
+activities = [ProfilerActivity.CUDA]
+prof_file = "prof_file_medusa.csv"
 
 
 def main(args):
@@ -37,15 +41,17 @@ def main(args):
     else:
         raise ValueError(f"Invalid style for console: {args.style}")
     try:
-        model = MedusaModel.from_pretrained(
-            args.model,
-            torch_dtype=torch.float16,
-            low_cpu_mem_usage=True,
-            device_map="auto",
-            load_in_8bit=args.load_in_8bit,
-            load_in_4bit=args.load_in_4bit,
-        )
-        tokenizer = model.get_tokenizer()
+        with profile(activities=activities, profile_memory=True, record_shapes=True) as prof1:
+            with record_function("model_load"):
+                model = MedusaModel.from_pretrained(
+                    args.model,
+                    torch_dtype=torch.float16,
+                    low_cpu_mem_usage=True,
+                    device_map="auto",
+                    load_in_8bit=args.load_in_8bit,
+                    load_in_4bit=args.load_in_4bit,
+                )
+                tokenizer = model.get_tokenizer()
         conv = None
 
         def new_chat():
@@ -69,11 +75,13 @@ def main(args):
             # with open(input_file, 'r') as pf:
             #     inp = pf.read()
             print("starting my prompter...")
-            prompter = Prompter(
-                tokenizer
-            )
-            context = prompter.generate_context(300, 50)
-            inp = prompter.generate_prompt(context, 300, 50)
+            with profile(activities=activities, profile_memory=True, record_shapes=True) as prof2:
+                with record_function("prompter"):
+                    prompter = Prompter(
+                        tokenizer
+                    )
+                    context = prompter.generate_context(300, 50)
+                    inp = prompter.generate_prompt(context, 300, 50)
             print(inp)
 
         except EOFError:
@@ -116,17 +124,23 @@ def main(args):
                 model.base_model.device
             )
             start_time = time.time()  # Record the start time
-            outputs = chatio.stream_output(
-                model.medusa_generate(
-                    input_ids,
-                    temperature=args.temperature,
-                    max_steps=args.max_steps,
-                )
-            )
+            with profile(activities=activities, profile_memory=True, record_shapes=True) as prof3:
+                with record_function("inference"):
+                    outputs = chatio.stream_output(
+                        model.medusa_generate(
+                            input_ids,
+                            temperature=args.temperature,
+                            max_steps=args.max_steps,
+                        )
+                    )
             end_time = time.time()  # Record the end time
             elapsed_time = end_time - start_time  # Calculate elapsed time
             print(f"Elapsed time: {elapsed_time:.3f} seconds")
             conv.update_last_message(outputs.strip())
+            with open(prof_file, 'a') as pf:
+                pf.write(prof1.key_averages().table())
+                pf.write(prof2.key_averages().table())
+                pf.write(prof3.key_averages().table())
 
         except KeyboardInterrupt:
             print("stopped generation.")
