@@ -68,26 +68,12 @@ def main(args):
             # input_file = "/home/seliny2/Medusa/profiling/vicuna-prompts/prompt_1K.txt"
             # with open(input_file, 'r') as pf:
             #     inp = pf.read()
-            with open('/home/seliny2/smart-kv/needle_in_a_haystack/config-prompt.yaml', 'r') as file:
-                config = yaml.load(file, Loader=yaml.FullLoader)
+            print("starting my prompter...")
             prompter = Prompter(
-                tokenizer,
-                needle=config['prompt']['needle'],
-                haystack_dir=config['prompt']['haystack_dir'],
-                retrieval_question=config['prompt']['retrieval_question'],
-
-                context_lengths_min=config['context']['min_len'],
-                context_lengths_max=config['context']['max_len'],
-                context_lengths_num_intervals=config['context']['interval'],
-                context_lengths=config['context']['manually_select_list'],
-
-                document_depth_percent_min=config['document_depth']['min_percent'],
-                document_depth_percent_max=config['document_depth']['max_percent'],
-                document_depth_percent_intervals=config['document_depth']['interval'],
-                document_depth_percents=config['document_depth']['manually_select_list'],
-                document_depth_percent_interval_type=config['document_depth']['interval_type']
+                tokenizer
             )
-            inp = prompter.generate_context(300, 5)
+            context = prompter.generate_context(300, 50)
+            inp = prompter.generate_prompt(context, 300, 50)
             print(inp)
 
         except EOFError:
