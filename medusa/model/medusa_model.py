@@ -141,13 +141,13 @@ class MedusaModelABC(nn.Module):
             config = MedusaConfig.from_pretrained(pretrained_model_name_or_path)
            
             config.no_flash_attn = True
-            config._attn_implementation = "eager"
-            print("info: " , config.no_flash_attn)
+            # config._attn_implementation = "eager"
+            # print("info: " , config.no_flash_attn)
             base_model_config = AutoConfig.from_pretrained(config.base_model_name_or_path)
             base_model_config.medusa_num_heads = 5 # TODO: fix the uploaded config (only include 2 heads)
             base_model_config.medusa_num_layers = config.medusa_num_layers
-            base_model_config._attn_implementation = "eager"
-            print("info: " , base_model_config._attn_implementation)
+            # base_model_config._attn_implementation = "eager"
+            # print("info: " , base_model_config._attn_implementation)
             model = super().from_pretrained(
                 config.base_model_name_or_path,
                 *args,

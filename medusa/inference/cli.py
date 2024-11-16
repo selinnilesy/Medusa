@@ -67,7 +67,7 @@ def main(args):
         try:
             torch.cuda.memory._dump_snapshot(f"{snapshot}-nvidia.pickle")
         except Exception as e:
-            logger.error(f"Failed to capture memory snapshot {e}")
+            print(f"Failed to capture memory snapshot {e}")
 
         conv = None
 
@@ -100,8 +100,8 @@ def main(args):
             prompter = Prompter(
                 tokenizer
             )
-            context = prompter.generate_context(300, 50)
-            inp = prompter.generate_prompt(context, 300, 50)
+            context = prompter.generate_context(500, 50)
+            inp = prompter.generate_prompt(context, 500, 50)
 
             # torch.cuda.memory._record_memory_history(enabled=None)
             # try:
@@ -179,9 +179,9 @@ def main(args):
             # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof3:
             #     with record_function("inference"):
 
-            # torch.cuda.memory._record_memory_history(
-            #     max_entries=INT_MAX
-            # )
+            torch.cuda.memory._record_memory_history(
+                max_entries=INT_MAX
+            )
                     
             outputs = chatio.stream_output(
                 model.medusa_generate(
@@ -193,11 +193,11 @@ def main(args):
             # Stop recording memory snapshot history.
             end_time = time.time()  # Record the end time
 
-            # torch.cuda.memory._record_memory_history(enabled=None)
-            # try:
-            #     torch.cuda.memory._dump_snapshot(f"{snapshot}-inference.pickle")
-            # except Exception as e:
-            #     logger.error(f"Failed to capture memory snapshot {e}")
+            torch.cuda.memory._record_memory_history(enabled=None)
+            try:
+                torch.cuda.memory._dump_snapshot(f"{snapshot}-nvidia.pickle")
+            except Exception as e:
+                print(f"Failed to capture memory snapshot {e}")
             
             elapsed_time = end_time - start_time  # Calculate elapsed time
             print(f"Elapsed time: {elapsed_time:.3f} seconds")
