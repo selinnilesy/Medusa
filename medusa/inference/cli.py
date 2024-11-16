@@ -45,29 +45,29 @@ def main(args):
     else:
         raise ValueError(f"Invalid style for console: {args.style}")
     try:
-        with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof1:
-            with record_function("model_load"):
+        # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof1:
+        #     with record_function("model_load"):
         
-        # torch.cuda.memory._record_memory_history(
-        #     max_entries=INT_MAX
-        # )
+        torch.cuda.memory._record_memory_history(
+            max_entries=INT_MAX
+        )
        
-                model = MedusaModel.from_pretrained(
-                    args.model,
-                    torch_dtype=torch.float16,
-                    low_cpu_mem_usage=True,
-                    device_map="auto",
-                    load_in_8bit=args.load_in_8bit,
-                    load_in_4bit=args.load_in_4bit,
-                )
+        model = MedusaModel.from_pretrained(
+            args.model,
+            torch_dtype=torch.float16,
+            low_cpu_mem_usage=True,
+            device_map="auto",
+            load_in_8bit=args.load_in_8bit,
+            load_in_4bit=args.load_in_4bit,
+        )
 
-                tokenizer = model.get_tokenizer()
+        tokenizer = model.get_tokenizer()
 
-        # torch.cuda.memory._record_memory_history(enabled=None)
-        # try:
-        #     torch.cuda.memory._dump_snapshot(f"{snapshot}-model.pickle")
-        # except Exception as e:
-        #     logger.error(f"Failed to capture memory snapshot {e}")
+        torch.cuda.memory._record_memory_history(enabled=None)
+        try:
+            torch.cuda.memory._dump_snapshot(f"{snapshot}-nvidia.pickle")
+        except Exception as e:
+            logger.error(f"Failed to capture memory snapshot {e}")
 
         conv = None
 
@@ -91,21 +91,17 @@ def main(args):
             conv = new_chat()
 
         try:
-            #inp = chatio.prompt_for_input(conv.roles[0])
-            # input_file = "/home/seliny2/Medusa/profiling/vicuna-prompts/prompt_1K.txt"
-            # with open(input_file, 'r') as pf:
-            #     inp = pf.read()
             print("starting my prompter...")
-            with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof2:
-                with record_function("prompter"):
+            # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof2:
+            #     with record_function("prompter"):
             # torch.cuda.memory._record_memory_history(
             #     max_entries=INT_MAX
             # )
-                    prompter = Prompter(
-                        tokenizer
-                    )
-                    context = prompter.generate_context(300, 50)
-                    inp = prompter.generate_prompt(context, 300, 50)
+            prompter = Prompter(
+                tokenizer
+            )
+            context = prompter.generate_context(300, 50)
+            inp = prompter.generate_prompt(context, 300, 50)
 
             # torch.cuda.memory._record_memory_history(enabled=None)
             # try:
@@ -180,20 +176,20 @@ def main(args):
                 model.base_model.device
             )
             start_time = time.time()  # Record the start time
-            with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof3:
-                with record_function("inference"):
+            # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof3:
+            #     with record_function("inference"):
 
             # torch.cuda.memory._record_memory_history(
             #     max_entries=INT_MAX
             # )
                     
-                    outputs = chatio.stream_output(
-                        model.medusa_generate(
-                            input_ids,
-                            temperature=args.temperature,
-                            max_steps=args.max_steps,
-                        )
-                    )
+            outputs = chatio.stream_output(
+                model.medusa_generate(
+                    input_ids,
+                    temperature=args.temperature,
+                    max_steps=32,
+                )
+            )
             # Stop recording memory snapshot history.
             end_time = time.time()  # Record the end time
 
@@ -207,10 +203,10 @@ def main(args):
             print(f"Elapsed time: {elapsed_time:.3f} seconds")
             conv.update_last_message(outputs.strip())
 
-            with open(prof_file, 'w') as pf:
-                pf.write(prof1.key_averages().table())
-                pf.write(prof2.key_averages().table())
-                pf.write(prof3.key_averages().table())
+            # with open(prof_file, 'w') as pf:
+            #     pf.write(prof1.key_averages().table())
+            #     pf.write(prof2.key_averages().table())
+            #     pf.write(prof3.key_averages().table())
 
         except KeyboardInterrupt:
             print("stopped generation.")
