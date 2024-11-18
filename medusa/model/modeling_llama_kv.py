@@ -345,13 +345,13 @@ class LlamaAttention(nn.Module):
 
         # print("llama attention here")
         kv_seq_len = key_states.shape[-2]
-        print("key_states1: ", key_states.shape)
-        print("kv_seq_len-1: ", kv_seq_len)
-        print("past_key_value[0].shape: ", past_key_value[0].shape)
+        # print("key_states1: ", key_states.shape)
+        # print("kv_seq_len-1: ", kv_seq_len)
+        # print("past_key_value[0].shape: ", past_key_value[0].shape)
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
-        print("kv_seq_len-2: ", kv_seq_len)
-        print("q_len: ", q_len)
+        # print("kv_seq_len-2: ", kv_seq_len)
+        # print("q_len: ", q_len)
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
@@ -368,17 +368,17 @@ class LlamaAttention(nn.Module):
             #     key_states = past_key_value[0].cat(key_states, dim=2)
             #     print("concat2- past_key_value[0]: ", past_key_value[0].shape)
             #     value_states = past_key_value[1].cat(value_states, dim=2)
-            print("key_states2: ", key_states.shape)
-            print("past_key_value[0]: ", past_key_value[0].data.shape)
+            # print("key_states2: ", key_states.shape)
+            # print("past_key_value[0]: ", past_key_value[0].shape)
         # Reset past_key_value to avoid return past_key_value.
         past_key_value = None
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        print("query_states: ", query_states.shape)
+        # print("query_states: ", query_states.shape)
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-        print("attn_weights: ", attn_weights.shape)
+        # print("attn_weights: ", attn_weights.shape)
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
@@ -387,7 +387,7 @@ class LlamaAttention(nn.Module):
             )
 
         if attention_mask is not None:
-            print("attention_mask: ", attention_mask.shape)
+            # print("attention_mask: ", attention_mask.shape)
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
                 raise ValueError(
                     f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"

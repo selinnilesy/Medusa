@@ -97,7 +97,7 @@ def main(args):
             prompter = Prompter(
                 tokenizer
             )
-            context_len=1000
+            context_len=500
             context = prompter.generate_context(context_len, 50)
             inp = prompter.generate_prompt(context, context_len, 50)
 
@@ -177,7 +177,7 @@ def main(args):
                             input_ids,
                             temperature=args.temperature,
                             max_steps=32,
-                            context_len=0,
+                            context_len=500,
                         )
                     )
                     end_time = time.time()  # Record the end time

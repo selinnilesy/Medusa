@@ -567,7 +567,7 @@ def update_inference_inputs(
     select_indices = (
         retrieve_indices[best_candidate, : accept_length + 1] + prev_input_len
     )
-    print("select_indices:" , select_indices)
+    # print("select_indices:" , select_indices)
     # Append the tokens from the best candidate to the input sequence
     input_ids = torch.cat(
         [input_ids, candidates[None, best_candidate, : accept_length + 1]], dim=-1
@@ -578,8 +578,8 @@ def update_inference_inputs(
         tgt = past_key_values_data[..., select_indices, :]
         # Destination tensor where the relevant past information will be stored
     except IndexError as e:
-        print(f"Error encountered while processing select_indices: {e}")
-        tgt = torch.zeros(
+        print(f"Error encountered while processing past_key_values_data with select_indices: {e}")
+        tgt_zeros = torch.zeros(
                     32 * 2,
                     1,
                     32,
@@ -587,19 +587,31 @@ def update_inference_inputs(
                     128,
                     device='cpu'
                 )
-        dst = torch.zeros(
-                    32 * 2,
-                    1,
-                    32,
-                    len(select_indices),
-                    128,
-                    device='cpu'
-                )
-        # dst = past_key_values_data[..., prev_input_len : prev_input_len + tgt[-2], :]
+        tgt = torch.cat([past_key_values_data, tgt_zeros], dim=-2)
+    try:
+        # print("prev_input_len:", prev_input_len)
+        dst = past_key_values_data[..., prev_input_len : prev_input_len + len(select_indices), :]
         # Copy relevant past information from the source to the destination
         dst.copy_(tgt, non_blocking=True)
         # Update the current length tensor (currently only support batch size is 1)
-        # current_length_data.fill_(prev_input_len + tgt.shape[-2])
+        current_length_data.fill_(prev_input_len + tgt.shape[-2])
+    except IndexError as e:
+        print(f"Error encountered while processing past_key_values_data with prev_input_len: {e}")
+        dst_zeros = torch.zeros(
+                    32 * 2,
+                    1,
+                    32,
+                    len(select_indices),
+                    128,
+                    device='cpu'
+                )
+        dst = torch.cat([past_key_values_data, dst_zeros], dim=-2)
+         # Copy relevant past information from the source to the destination
+        dst.copy_(tgt, non_blocking=True)
+        # Update the current length tensor (currently only support batch size is 1)
+        current_length_data.fill_(prev_input_len + tgt.shape[-2])
+        
+    
    
     
     # Extract logits and medusa logits for the accepted tokens

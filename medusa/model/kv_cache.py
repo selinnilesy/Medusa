@@ -62,7 +62,7 @@ class KVCache:
         """
         # dst = self.data.narrow(dim, self.current_length, tensor.shape[dim])
         # dst.copy_(tensor)
-        # 
+        # self.current_length += tensor.shape[dim]
         # return torch.narrow(self.data, 2, 0, self.current_length)
         self.current_length += tensor.shape[dim]
         print(self.current_length)
@@ -95,7 +95,7 @@ def initialize_past_key_values(model, context_len):
         config.num_hidden_layers * 2,
         batch_size,
         config.num_key_value_heads,
-        context_len,
+        0,
         config.hidden_size // config.num_attention_heads,
         device=model.device,
         dtype=model.dtype,
@@ -116,7 +116,7 @@ def initialize_past_key_values(model, context_len):
     for i in range(config.num_hidden_layers):
         past_key_values.append(
             [
-                KVCache(past_key_values_data[2*i+j] , 0) for j in range(2)
+                KVCache(past_key_values_data[2*i+j] , current_length_data[2*i+j]) for j in range(2)
             ] 
         )
     return past_key_values, past_key_values_data, current_length_data
