@@ -52,8 +52,8 @@ print("starting my prompter...")
 prompter = Prompter(
     tokenizer
 )
-context = prompter.generate_context(500, 50)
-inp = prompter.generate_prompt(context, 500, 50)
+context = prompter.generate_context(1000, 50)
+inp = prompter.generate_prompt(context, 1000, 50)
 print(inp)
 chatio = SimpleChatIO()
 conv = get_conversation_template("lmsys/vicuna-7b-v1.3")

@@ -71,7 +71,6 @@ def main(args):
 
         def new_chat():
             return get_conversation_template(args.model)
-            return get_conversation_template(args.model)
 
         def reload_conv(conv):
             """
@@ -98,8 +97,9 @@ def main(args):
             prompter = Prompter(
                 tokenizer
             )
-            context = prompter.generate_context(500, 50)
-            inp = prompter.generate_prompt(context, 500, 50)
+            context_len=1000
+            context = prompter.generate_context(context_len, 50)
+            inp = prompter.generate_prompt(context, context_len, 50)
 
             # torch.cuda.memory._record_memory_history(enabled=None)
             # try:
@@ -155,15 +155,6 @@ def main(args):
             conv.messages = new_conv["messages"]
             reload_conv(conv)
             # continue
-            conv = get_conv_template(new_conv["template_name"])
-            conv.set_system_message(new_conv["system_message"])
-            conv.messages = new_conv["messages"]
-            reload_conv(conv)
-            # continue
-
-        conv.append_message(conv.roles[0], inp)
-        conv.append_message(conv.roles[1], None)
-        prompt = conv.get_prompt()
         conv.append_message(conv.roles[0], inp)
         conv.append_message(conv.roles[1], None)
         prompt = conv.get_prompt()
@@ -173,23 +164,25 @@ def main(args):
             input_ids = tokenizer.encode(prompt, return_tensors="pt").to(
                 model.base_model.device
             )
-            start_time = time.time()  # Record the start time
+            
             with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof3:
                 with record_function("inference"):
 
             # torch.cuda.memory._record_memory_history(
             #     max_entries=INT_MAX
             # )
-                    
+                    start_time = time.time()  # Record the start time
                     outputs = chatio.stream_output(
                         model.medusa_generate(
                             input_ids,
                             temperature=args.temperature,
                             max_steps=32,
+                            context_len=0,
                         )
                     )
+                    end_time = time.time()  # Record the end time
             # Stop recording memory snapshot history.
-            end_time = time.time()  # Record the end time
+            
 
             # torch.cuda.memory._record_memory_history(enabled=None)
             # try:

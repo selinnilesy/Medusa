@@ -252,9 +252,10 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
 class LlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: LlamaConfig):
+    def __init__(self, config: LlamaConfig, layer_idx: Optional[int]):
         super().__init__()
         self.config = config
+        self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
         self.head_dim = self.hidden_size // self.num_heads
@@ -344,8 +345,13 @@ class LlamaAttention(nn.Module):
 
         # print("llama attention here")
         kv_seq_len = key_states.shape[-2]
+        print("key_states1: ", key_states.shape)
+        print("kv_seq_len-1: ", kv_seq_len)
+        print("past_key_value[0].shape: ", past_key_value[0].shape)
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
+        print("kv_seq_len-2: ", kv_seq_len)
+        print("q_len: ", q_len)
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
@@ -353,15 +359,26 @@ class LlamaAttention(nn.Module):
         # past_key_value is utilized to leverage previously computed key and value states.
         # If past_key_value is available, reuse the states for k, v, and self_attention.
         if past_key_value is not None:
+            # if key_states.shape[-2]==kv_seq_len:
+            #     kv_seq_len = key_states.shape[-2]
             key_states = past_key_value[0].cat(key_states, dim=2)
             value_states = past_key_value[1].cat(value_states, dim=2)
+            # else:
+            #     print("concat1- past_key_value[0]: ", past_key_value[0].shape)
+            #     key_states = past_key_value[0].cat(key_states, dim=2)
+            #     print("concat2- past_key_value[0]: ", past_key_value[0].shape)
+            #     value_states = past_key_value[1].cat(value_states, dim=2)
+            print("key_states2: ", key_states.shape)
+            print("past_key_value[0]: ", past_key_value[0].data.shape)
         # Reset past_key_value to avoid return past_key_value.
         past_key_value = None
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
+        print("query_states: ", query_states.shape)
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        print("attn_weights: ", attn_weights.shape)
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
@@ -370,6 +387,7 @@ class LlamaAttention(nn.Module):
             )
 
         if attention_mask is not None:
+            print("attention_mask: ", attention_mask.shape)
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
                 raise ValueError(
                     f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
@@ -582,11 +600,12 @@ class LlamaFlashAttention2(LlamaAttention):
 
 
 class LlamaDecoderLayer(nn.Module):
-    def __init__(self, config: LlamaConfig):
+    def __init__(self, config: LlamaConfig, layer_idx: Optional[int]):
         super().__init__()
+        self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
         self.self_attn = (
-            LlamaAttention(config=config)
+            LlamaAttention(config=config, layer_idx=self.layer_idx)
             if not getattr(config, "_flash_attn_2_enabled", False)
             else LlamaFlashAttention2(config=config)
         )
@@ -778,7 +797,7 @@ class LlamaModel(LlamaPreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False

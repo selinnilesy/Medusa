@@ -252,7 +252,8 @@ class MedusaModelABC(nn.Module):
         posterior_alpha=0.3,
         top_p=0.8, 
         sampling = 'typical', 
-        fast = True
+        fast = True,
+        **kwargs,
     ):
         """
         Args:
@@ -289,6 +290,8 @@ class MedusaModelABC(nn.Module):
         self.medusa_buffers = medusa_buffers
         self.medusa_choices = medusa_choices
 
+        context_len = kwargs.get("context_len", 2048)
+
         # Initialize the past key and value states
         if hasattr(self, "past_key_values"):
             past_key_values = self.past_key_values
@@ -301,7 +304,7 @@ class MedusaModelABC(nn.Module):
                 past_key_values,
                 past_key_values_data,
                 current_length_data,
-            ) = initialize_past_key_values(self.base_model)
+            ) = initialize_past_key_values(self.base_model, context_len)
             self.past_key_values = past_key_values
             self.past_key_values_data = past_key_values_data
             self.current_length_data = current_length_data

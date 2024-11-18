@@ -567,20 +567,23 @@ def update_inference_inputs(
     select_indices = (
         retrieve_indices[best_candidate, : accept_length + 1] + prev_input_len
     )
+    print("select_indices:" , select_indices)
     # Append the tokens from the best candidate to the input sequence
     input_ids = torch.cat(
         [input_ids, candidates[None, best_candidate, : accept_length + 1]], dim=-1
     )
     # Update the past key values based on the selected tokens
     # Source tensor that contains relevant past information based on the selected candidate
-    tgt = past_key_values_data[..., select_indices, :]
-    # Destination tensor where the relevant past information will be stored
-    dst = past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :]
-    # Copy relevant past information from the source to the destination
-    dst.copy_(tgt, non_blocking=True)
-
-    # Update the current length tensor (currently only support batch size is 1)
-    current_length_data.fill_(prev_input_len + tgt.shape[-2])
+    try:
+        tgt = past_key_values_data[..., select_indices, :]
+        # Destination tensor where the relevant past information will be stored
+        dst = past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :]
+        # Copy relevant past information from the source to the destination
+        dst.copy_(tgt, non_blocking=True)
+        # Update the current length tensor (currently only support batch size is 1)
+        current_length_data.fill_(prev_input_len + tgt.shape[-2])
+    except IndexError as e:
+        print(f"Error encountered while processing select_indices: {e}")
 
     # Extract logits and medusa logits for the accepted tokens
     logits = logits[None, best_candidate, accept_length : accept_length + 1]

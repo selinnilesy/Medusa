@@ -31,7 +31,7 @@ class KVCache:
         return (
             self.data.shape[0],
             self.data.shape[1],
-            self.current_length.item(),
+            self.current_length,
             self.data.shape[3],
         )
 
@@ -60,13 +60,17 @@ class KVCache:
         Returns:
             torch.Tensor: The data tensor after concatenation up to the current length.
         """
-        dst = self.data.narrow(dim, self.current_length, tensor.shape[dim])
-        dst.copy_(tensor)
-        self.current_length.add_(tensor.shape[dim])
-        return torch.narrow(self.data, 2, 0, self.current_length)
+        # dst = self.data.narrow(dim, self.current_length, tensor.shape[dim])
+        # dst.copy_(tensor)
+        # 
+        # return torch.narrow(self.data, 2, 0, self.current_length)
+        self.current_length += tensor.shape[dim]
+        print(self.current_length)
+        self.data = torch.cat([self.data, tensor], dim=dim)
+        return self.data
 
 
-def initialize_past_key_values(model):
+def initialize_past_key_values(model, context_len):
     """
     Initialize past key and value states for a given transformer model.
 
@@ -91,11 +95,16 @@ def initialize_past_key_values(model):
         config.num_hidden_layers * 2,
         batch_size,
         config.num_key_value_heads,
-        config.max_position_embeddings,
+        context_len,
         config.hidden_size // config.num_attention_heads,
         device=model.device,
         dtype=model.dtype,
     )
+    print("context_len: ", context_len)
+    memory_size = torch.numel(past_key_values_data)*past_key_values_data.element_size()
+    print(f"past_key_values_data's memory_size: {memory_size}")
+    print("max_position_embeddings:", config.max_position_embeddings)
+    print("config.hidden_size // config.num_attention_heads:", config.hidden_size // config.num_attention_heads)
     # Initialize tensor to store the current length of the cached data for all layers.
     # [IMPORTANT] It needs to be kept on CPU for quick access and updates.
     current_length_data = torch.zeros(
@@ -103,11 +112,11 @@ def initialize_past_key_values(model):
     )
     # Creating a KVCache for each pair of key and value in all layers
     past_key_values = [] * config.num_hidden_layers
+    print("num_hidden_layers: ", config.num_hidden_layers)
     for i in range(config.num_hidden_layers):
         past_key_values.append(
             [
-                KVCache(past_key_values_data[i * 2 + j], current_length_data[i * 2 + j])
-                for j in range(2)
-            ]
+                KVCache(past_key_values_data[2*i+j] , current_length_data[]) for j in range(2)
+            ] 
         )
     return past_key_values, past_key_values_data, current_length_data
