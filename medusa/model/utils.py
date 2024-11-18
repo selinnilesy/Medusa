@@ -577,14 +577,31 @@ def update_inference_inputs(
     try:
         tgt = past_key_values_data[..., select_indices, :]
         # Destination tensor where the relevant past information will be stored
-        dst = past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :]
+    except IndexError as e:
+        print(f"Error encountered while processing select_indices: {e}")
+        tgt = torch.zeros(
+                    32 * 2,
+                    1,
+                    32,
+                    len(select_indices),
+                    128,
+                    device='cpu'
+                )
+        dst = torch.zeros(
+                    32 * 2,
+                    1,
+                    32,
+                    len(select_indices),
+                    128,
+                    device='cpu'
+                )
+        # dst = past_key_values_data[..., prev_input_len : prev_input_len + tgt[-2], :]
         # Copy relevant past information from the source to the destination
         dst.copy_(tgt, non_blocking=True)
         # Update the current length tensor (currently only support batch size is 1)
-        current_length_data.fill_(prev_input_len + tgt.shape[-2])
-    except IndexError as e:
-        print(f"Error encountered while processing select_indices: {e}")
-
+        # current_length_data.fill_(prev_input_len + tgt.shape[-2])
+   
+    
     # Extract logits and medusa logits for the accepted tokens
     logits = logits[None, best_candidate, accept_length : accept_length + 1]
     medusa_logits = medusa_logits[

@@ -116,7 +116,7 @@ def initialize_past_key_values(model, context_len):
     for i in range(config.num_hidden_layers):
         past_key_values.append(
             [
-                KVCache(past_key_values_data[2*i+j] , current_length_data[2*i+j]) for j in range(2)
+                KVCache(past_key_values_data[2*i+j] , 0) for j in range(2)
             ] 
         )
     return past_key_values, past_key_values_data, current_length_data
