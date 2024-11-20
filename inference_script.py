@@ -74,7 +74,6 @@ input_ids = tokenizer.encode(prompt, return_tensors="pt").to(
         model.base_model.device
 )
 input_len = input_ids.shape[1]
-print(input_len)
 
 # start generating with medusa with initialization
 # actual generation start from medusa_model.py line 319
