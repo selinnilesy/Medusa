@@ -473,6 +473,7 @@ def evaluate_posterior(
         
     if sampling == 'typical':
         if fast:
+            # posterior_prob = torch.softmax(logits[:, :-1] / temperature, dim=-1).to(device='cpu')
             posterior_prob = torch.softmax(logits[:, :-1] / temperature, dim=-1)
             candidates_prob = torch.gather(
                 posterior_prob, dim=-1, index=candidates[:, 1:].unsqueeze(-1)

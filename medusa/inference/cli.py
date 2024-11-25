@@ -32,8 +32,6 @@ from torch.profiler import profile, record_function, ProfilerActivity
 
 activities = [ProfilerActivity.CUDA]
 prof_file = "prof_file_medusa.csv"
-trace = "trace_medusa.ctf"
-snapshot = "medusa"
     
 def main(args):
     if args.style == "simple":
@@ -48,9 +46,9 @@ def main(args):
         # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof1:
         #     with record_function("model_load"):
         
-        torch.cuda.memory._record_memory_history(
-            max_entries=INT_MAX
-        )
+        # torch.cuda.memory._record_memory_history(
+        #     max_entries=INT_MAX
+        # )
        
         model = MedusaModel.from_pretrained(
             args.model,
@@ -63,16 +61,15 @@ def main(args):
 
         tokenizer = model.get_tokenizer()
 
-        torch.cuda.memory._record_memory_history(enabled=None)
-        try:
-            torch.cuda.memory._dump_snapshot(f"{snapshot}-nvidia.pickle")
-        except Exception as e:
-            print(f"Failed to capture memory snapshot {e}")
+        # torch.cuda.memory._record_memory_history(enabled=None)
+        # try:
+        #     torch.cuda.memory._dump_snapshot(f"{snapshot}-nvidia.pickle")
+        # except Exception as e:
+        #     print(f"Failed to capture memory snapshot {e}")
 
         conv = None
 
         def new_chat():
-            return get_conversation_template(args.model)
             return get_conversation_template(args.model)
 
         def reload_conv(conv):
@@ -83,9 +80,6 @@ def main(args):
                 chatio.prompt_for_output(message[0])
                 chatio.print_output(message[1])
 
-        #while True:
-        if not conv:
-            conv = new_chat()
         #while True:
         if not conv:
             conv = new_chat()
@@ -100,8 +94,8 @@ def main(args):
             prompter = Prompter(
                 tokenizer
             )
-            context = prompter.generate_context(500, 50)
-            inp = prompter.generate_prompt(context, 500, 50)
+            context = prompter.generate_context(300, 50)
+            inp = prompter.generate_prompt(context, 300, 50)
 
             # torch.cuda.memory._record_memory_history(enabled=None)
             # try:
@@ -120,21 +114,7 @@ def main(args):
                 # continue
             else:
                 filename = args[1]
-            if len(args) != 2:
-                print("usage: !!load <filename>")
-                # continue
-            else:
-                filename = args[1]
 
-            # Check if file exists and add .json if needed
-            if not os.path.exists(filename):
-                if (not filename.endswith(".json")) and os.path.exists(
-                    filename + ".json"
-                ):
-                    filename += ".json"
-                else:
-                    print("file not found:", filename)
-                    # continue
             # Check if file exists and add .json if needed
             if not os.path.exists(filename):
                 if (not filename.endswith(".json")) and os.path.exists(
@@ -148,24 +128,12 @@ def main(args):
             print("loading...", filename)
             with open(filename, "r") as infile:
                 new_conv = json.load(infile)
-            print("loading...", filename)
-            with open(filename, "r") as infile:
-                new_conv = json.load(infile)
 
             conv = get_conv_template(new_conv["template_name"])
             conv.set_system_message(new_conv["system_message"])
             conv.messages = new_conv["messages"]
             reload_conv(conv)
-            # continue
-            conv = get_conv_template(new_conv["template_name"])
-            conv.set_system_message(new_conv["system_message"])
-            conv.messages = new_conv["messages"]
-            reload_conv(conv)
-            # continue
 
-        conv.append_message(conv.roles[0], inp)
-        conv.append_message(conv.roles[1], None)
-        prompt = conv.get_prompt()
         conv.append_message(conv.roles[0], inp)
         conv.append_message(conv.roles[1], None)
         prompt = conv.get_prompt()
@@ -179,9 +147,9 @@ def main(args):
             # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof3:
             #     with record_function("inference"):
 
-            torch.cuda.memory._record_memory_history(
-                max_entries=INT_MAX
-            )
+            # torch.cuda.memory._record_memory_history(
+            #     max_entries=INT_MAX
+            # )
                     
             outputs = chatio.stream_output(
                 model.medusa_generate(
@@ -193,11 +161,11 @@ def main(args):
             # Stop recording memory snapshot history.
             end_time = time.time()  # Record the end time
 
-            torch.cuda.memory._record_memory_history(enabled=None)
-            try:
-                torch.cuda.memory._dump_snapshot(f"{snapshot}-nvidia.pickle")
-            except Exception as e:
-                print(f"Failed to capture memory snapshot {e}")
+            # torch.cuda.memory._record_memory_history(enabled=None)
+            # try:
+            #     torch.cuda.memory._dump_snapshot(f"{snapshot}-nvidia.pickle")
+            # except Exception as e:
+            #     print(f"Failed to capture memory snapshot {e}")
             
             elapsed_time = end_time - start_time  # Calculate elapsed time
             print(f"Elapsed time: {elapsed_time:.3f} seconds")
@@ -217,7 +185,6 @@ def main(args):
                 if conv.messages[-1][0] == conv.roles[0]:
                     conv.messages.pop()
 
-                reload_conv(conv)
                 reload_conv(conv)
 
     except KeyboardInterrupt:

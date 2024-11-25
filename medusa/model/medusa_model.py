@@ -317,8 +317,15 @@ class MedusaModelABC(nn.Module):
         new_token = 0
         last_round_token = 0
 
-        for idx in range(max_steps):
+        for idx in range(5):
+            print("step #:", idx)
+
+            # stream = torch.cuda.Stream()
+            # with torch.cuda.stream(stream):
             # Generate candidates with topk predictions from Medusa heads
+
+            # top k  of medusa_logits per head is appended to top result of logit
+            # these candidates are converted to tree structure with tree indices buffer
             candidates, tree_candidates = generate_candidates(
                 medusa_logits,
                 logits,
@@ -333,6 +340,9 @@ class MedusaModelABC(nn.Module):
             )
 
             # Use tree attention to verify the candidates and get predictions
+
+            # tree_candidates are input ids to medusa model.
+            # model here returns verified sequences as medusa_logits for all candidates
             medusa_logits, logits, outputs = tree_decoding(
                 self,
                 tree_candidates,
@@ -341,7 +351,9 @@ class MedusaModelABC(nn.Module):
                 input_ids,
                 medusa_buffers["retrieve_indices"],
             )
-
+            
+            # stream.synchronize()
+            # candidates_cpu = candidates.to(device='cpu')
             # Evaluate the posterior of the candidates to select the accepted candidate prefix
             best_candidate, accept_length = evaluate_posterior(
                 logits, candidates, temperature, posterior_threshold, posterior_alpha, top_p=top_p, sampling=sampling, fast=fast
