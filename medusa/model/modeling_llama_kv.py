@@ -14,7 +14,6 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
-# [MODIFIED] Import from transformer library
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
@@ -28,13 +27,6 @@ from transformers.utils import (
 )
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.cache_utils import Cache, DynamicCache
-
-
-from snapkv.monkeypatch.snapkv_utils import init_snapkv
-
-# if is_flash_attn_available():
-#     from flash_attn import flash_attn_func, flash_attn_varlen_func
-#     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
 
 
 logger = logging.get_logger(__name__)
@@ -314,14 +306,14 @@ class LlamaAttention(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         # past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        past_key_value: Optional[Cache] = None,
+        past_key_values: Optional[Cache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
         padding_mask: Optional[torch.LongTensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         
         ########### [SnapKV]
-        init_snapkv(self)
+        # init_snapkv(self)
         ########### [SnapKV]
 
         bsz, q_len, _ = hidden_states.size()
@@ -352,9 +344,11 @@ class LlamaAttention(nn.Module):
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
+        # print("medusa heads:", self.num_heads)
+
         kv_seq_len = key_states.shape[-2]
-        if past_key_value is not None:
-            kv_seq_len += past_key_value[0].shape[-2]
+        if past_key_values is not None:
+            kv_seq_len += past_key_values[self.layer_idx][0].shape[-2]
 
 
         ########### [SnapKV]
@@ -373,23 +367,30 @@ class LlamaAttention(nn.Module):
         # If past_key_value is available, reuse the states for k, v, and self_attention.
 
 
-        if past_key_value is not None:
+        #print("kv_seq_len", kv_seq_len) #increases gradually
+        #print("key_states.shape[-2]", key_states.shape[-2])
+        if past_key_values is not None:
             ########### [SnapKV]
             # if key_states.shape[-2] == kv_seq_len:
-            #     # print("Using Snapkv Right Now")
-            #     key_states_compress, value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states, attention_mask, self.num_key_value_groups)
+            #      , value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states, attention_mask, self.num_key_value_groups)
+            #     #print("snapkv called here for ", key_states.shape[-2], " and ", kv_seq_len)
             #     _ = past_key_value[0].cat(key_states_compress, dim=2)
             #     _ = past_key_value[1].cat(value_states_compress, dim=2)
             # else:
-            key_states = past_key_value[0].cat(key_states, dim=2)
-            value_states = past_key_value[1].cat(value_states, dim=2)
+            #     ##print("snapkv not called here for ", key_states.shape[-2], " and ", kv_seq_len)
+            # key_states = past_key_value[0].cat(key_states, dim=2)
+            # value_states = past_key_value[1].cat(value_states, dim=2)
+
+            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
+            # print("key_states.shape", key_states.shape)
+            # print("value_states.shape", value_states.shape)
 
             ########### [SnapKV]
 
 
 
         # Reset past_key_value to avoid return past_key_value.
-        past_key_value = None
+        #print("use_cache:", use_cache)
 
         # key_states = repeat_kv(key_states, self.num_key_value_groups)
         # value_states = repeat_kv(value_states, self.num_key_value_groups)
@@ -433,7 +434,7 @@ class LlamaAttention(nn.Module):
         if not output_attentions:
             attn_weights = None
 
-        return attn_output, attn_weights, past_key_value
+        return attn_output, attn_weights, past_key_values
 
 
 class LlamaFlashAttention2(LlamaAttention):
@@ -655,7 +656,7 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        past_key_values: Optional[Cache] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         padding_mask: Optional[torch.LongTensor] = None,
@@ -683,7 +684,7 @@ class LlamaDecoderLayer(nn.Module):
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            past_key_value=past_key_value,
+            past_key_values=past_key_values,
             output_attentions=output_attentions,
             use_cache=use_cache,
             padding_mask=padding_mask,
@@ -889,7 +890,7 @@ class LlamaModel(LlamaPreTrainedModel):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values=None,  # [MODIFIED] past_key_value is KVCache class
+        past_key_values=Optional[Cache],  # [MODIFIED] past_key_value is KVCache class
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
@@ -988,7 +989,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     hidden_states,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
-                    past_key_value=past_key_value,
+                    past_key_values=past_key_values,
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                     padding_mask=padding_mask,
@@ -1057,7 +1058,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values=None,  # [MODIFIED] past_key_value is KVCache class
+        past_key_values=Optional[Cache],  # [MODIFIED] past_key_value is KVCache class
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
@@ -1147,7 +1148,25 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
     def prepare_inputs_for_generation(
         self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
     ):
+        print("-----Prepare Inputs-----")
+        ########### [SnapKV]
+        if past_key_values is None:
+            for layer in self.model.layers:
+                layer.self_attn.kv_seq_len = 0
+        ########### [SnapKV]
+
         if past_key_values:
+            ########### [SnapKV]
+            if isinstance(past_key_values, Cache):
+                cache_length = past_key_values.get_seq_length()
+                past_length = past_key_values.seen_tokens
+                max_cache_length = past_key_values.get_max_length()
+            else:
+                # cache_length = past_length = past_key_values[0][0].shape[2]
+                # max_cache_length = None
+                cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
+                max_cache_length = None
+            ########### [SnapKV]
             input_ids = input_ids[:, -1:]
             
         position_ids = kwargs.get("position_ids", None)
@@ -1222,7 +1241,7 @@ class LlamaForSequenceClassification(LlamaPreTrainedModel):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        past_key_values: Optional[Cache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,

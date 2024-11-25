@@ -252,7 +252,8 @@ class MedusaModelABC(nn.Module):
         posterior_alpha=0.3,
         top_p=0.8, 
         sampling = 'typical', 
-        fast = True
+        fast = True,
+        **kwargs,
     ):
         """
         Args:
@@ -289,19 +290,25 @@ class MedusaModelABC(nn.Module):
         self.medusa_buffers = medusa_buffers
         self.medusa_choices = medusa_choices
 
+        context_len = kwargs.get("context_len", 2048)
+
         # Initialize the past key and value states
         if hasattr(self, "past_key_values"):
             past_key_values = self.past_key_values
-            past_key_values_data = self.past_key_values_data
-            current_length_data = self.current_length_data
-            # Reset the past key and value states
-            current_length_data.zero_()
+            print("already initialized here !!!")
+            # past_key_values_data = self.past_key_values_data
+            # # print(past_key_values_data.shape)
+            # current_length_data = self.current_length_data
+            # # print(current_length_data)
+            # # Reset the past key and value states
+            # current_length_data.zero_()
+            # print(current_length_data)
         else:
             (
-                past_key_values,
+                past_key_values, 
                 past_key_values_data,
-                current_length_data,
-            ) = initialize_past_key_values(self.base_model)
+                current_length_data
+            ) = initialize_past_key_values(self.base_model, context_len)
             self.past_key_values = past_key_values
             self.past_key_values_data = past_key_values_data
             self.current_length_data = current_length_data
@@ -317,8 +324,8 @@ class MedusaModelABC(nn.Module):
         new_token = 0
         last_round_token = 0
 
-        for idx in range(5):
-            print("step #:", idx)
+        for idx in range(max_steps):
+            print("Step #", idx)
 
             # stream = torch.cuda.Stream()
             # with torch.cuda.stream(stream):
@@ -338,6 +345,11 @@ class MedusaModelABC(nn.Module):
                 sampling=sampling,
                 fast=fast,
             )
+            x = self.tokenizer.decode(
+                    input_ids[0, input_len:],
+                    skip_special_tokens=True,
+                    spaces_between_special_tokens=False,
+                    clean_up_tokenization_spaces=True,)
 
             # Use tree attention to verify the candidates and get predictions
 
@@ -359,20 +371,21 @@ class MedusaModelABC(nn.Module):
                 logits, candidates, temperature, posterior_threshold, posterior_alpha, top_p=top_p, sampling=sampling, fast=fast
             )
 
+            with torch.inference_mode():
             # Update the input_ids and logits
-            input_ids, logits, medusa_logits, new_token = update_inference_inputs(
-                input_ids,
-                candidates,
-                best_candidate,
-                accept_length,
-                medusa_buffers["retrieve_indices"],
-                outputs,
-                logits,
-                medusa_logits,
-                new_token,
-                past_key_values_data,
-                current_length_data,
-            )
+                input_ids, logits, medusa_logits, new_token = update_inference_inputs(
+                    input_ids,
+                    candidates,
+                    best_candidate,
+                    accept_length,
+                    medusa_buffers["retrieve_indices"],
+                    outputs,
+                    logits,
+                    medusa_logits,
+                    new_token,
+                    past_key_values,
+                    self.current_length_data,
+                )
 
             yield {
                 "text": self.tokenizer.decode(

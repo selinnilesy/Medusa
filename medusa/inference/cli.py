@@ -22,6 +22,7 @@ from fastchat.model.model_adapter import get_conversation_template
 from fastchat.conversation import get_conv_template
 import json
 from medusa.model.medusa_model import MedusaModel
+# from medusa.model.monkeypatch import replace_llama
 import time
 import yaml
 from needle_in_a_haystack.prompt import Prompter
@@ -43,23 +44,24 @@ def main(args):
     else:
         raise ValueError(f"Invalid style for console: {args.style}")
     try:
-        # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof1:
-        #     with record_function("model_load"):
+        # replace_llama()
+        with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof1:
+            with record_function("model_load"):
         
         # torch.cuda.memory._record_memory_history(
         #     max_entries=INT_MAX
-        # )
+        # )]
        
-        model = MedusaModel.from_pretrained(
-            args.model,
-            torch_dtype=torch.float16,
-            low_cpu_mem_usage=True,
-            device_map="auto",
-            load_in_8bit=args.load_in_8bit,
-            load_in_4bit=args.load_in_4bit,
-        )
+                model = MedusaModel.from_pretrained(
+                    args.model,
+                    torch_dtype=torch.float16,
+                    low_cpu_mem_usage=True,
+                    device_map="auto",
+                    load_in_8bit=args.load_in_8bit,
+                    load_in_4bit=args.load_in_4bit,
+                )
 
-        tokenizer = model.get_tokenizer()
+                tokenizer = model.get_tokenizer()
 
         # torch.cuda.memory._record_memory_history(enabled=None)
         # try:
@@ -94,8 +96,9 @@ def main(args):
             prompter = Prompter(
                 tokenizer
             )
-            context = prompter.generate_context(300, 50)
-            inp = prompter.generate_prompt(context, 300, 50)
+            context_len=500
+            context = prompter.generate_context(context_len, 50)
+            inp = prompter.generate_prompt(context, context_len, 50)
 
             # torch.cuda.memory._record_memory_history(enabled=None)
             # try:
@@ -143,23 +146,25 @@ def main(args):
             input_ids = tokenizer.encode(prompt, return_tensors="pt").to(
                 model.base_model.device
             )
-            start_time = time.time()  # Record the start time
-            # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof3:
-            #     with record_function("inference"):
+            
+            with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof3:
+                with record_function("inference"):
 
             # torch.cuda.memory._record_memory_history(
             #     max_entries=INT_MAX
             # )
-                    
-            outputs = chatio.stream_output(
-                model.medusa_generate(
-                    input_ids,
-                    temperature=args.temperature,
-                    max_steps=32,
-                )
-            )
+                    start_time = time.time()  # Record the start time
+                    outputs = chatio.stream_output(
+                        model.medusa_generate(
+                            input_ids,
+                            temperature=args.temperature,
+                            max_steps=32,
+                            context_len=0,
+                        )
+                    )
+                    end_time = time.time()  # Record the end time
             # Stop recording memory snapshot history.
-            end_time = time.time()  # Record the end time
+            
 
             # torch.cuda.memory._record_memory_history(enabled=None)
             # try:
@@ -167,14 +172,15 @@ def main(args):
             # except Exception as e:
             #     print(f"Failed to capture memory snapshot {e}")
             
+            
             elapsed_time = end_time - start_time  # Calculate elapsed time
             print(f"Elapsed time: {elapsed_time:.3f} seconds")
             conv.update_last_message(outputs.strip())
 
-            # with open(prof_file, 'w') as pf:
-            #     pf.write(prof1.key_averages().table())
-            #     pf.write(prof2.key_averages().table())
-            #     pf.write(prof3.key_averages().table())
+            with open(prof_file, 'w') as pf:
+                pf.write(prof1.key_averages().table())
+                # pf.write(prof2.key_averages().table())
+                pf.write(prof3.key_averages().table())
 
         except KeyboardInterrupt:
             print("stopped generation.")

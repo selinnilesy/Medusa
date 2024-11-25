@@ -91,14 +91,17 @@ def generate_medusa_buffers(medusa_choices, device="cuda"):
     # Generate retrieval indices for Medusa structure verification
     retrieve_indices_nest = []
     retrieve_paths = []
+    print("sorted_medusa_choices:", sorted_medusa_choices)
     for i in range(len(sorted_medusa_choices)):
         cur_medusa_choice = sorted_medusa_choices[-i-1]
         retrieve_indice = []
+        print("cur_medusa_choice:", cur_medusa_choice)
         if cur_medusa_choice in retrieve_paths:
             continue
         else:
             for c in range(len(cur_medusa_choice)):
                 retrieve_indice.append(sorted_medusa_choices.index(cur_medusa_choice[:c+1]))
+                print("retrieved_indice:", retrieve_indice[-1])
                 retrieve_paths.append(cur_medusa_choice[:c+1])
         retrieve_indices_nest.append(retrieve_indice)
     max_length = max([len(x) for x in retrieve_indices_nest])
@@ -106,6 +109,7 @@ def generate_medusa_buffers(medusa_choices, device="cuda"):
     retrieve_indices = torch.tensor(retrieve_indices, dtype=torch.long)
     retrieve_indices = retrieve_indices + 1
     retrieve_indices = torch.cat([torch.zeros((retrieve_indices.shape[0], 1), dtype=torch.long), retrieve_indices], dim=1)
+    print("retrieve_indices padded:", retrieve_indices)
 
     # Aggregate the generated buffers into a dictionary
     medusa_buffers = {
@@ -467,6 +471,7 @@ def evaluate_posterior(
         if accept_length == 0:
             # Default to the first candidate if none are accepted
             best_candidate = torch.tensor(0, dtype=torch.long, device=candidates.device)
+            print("defaulting to the first candidate sequence")
         else:
             best_candidate = torch.argmax(candidates_accept_length).to(torch.long)
         return best_candidate, accept_length
@@ -539,7 +544,7 @@ def update_inference_inputs(
     logits,
     medusa_logits,
     new_token,
-    past_key_values_data,
+    past_key_values,
     current_length_data,
 ):
     """
@@ -564,25 +569,48 @@ def update_inference_inputs(
     """
     # Calculate the starting position for new tokens based on the previous input length
     prev_input_len = input_ids.shape[1]
+    # print("prev_input_len", prev_input_len)
+    # print("best_candidate", best_candidate)
+    # print("accept_length", accept_length)
+    # print("previous outputs", outputs)
+    # print("retrieved_indices", retrieve_indices[best_candidate, : accept_length + 1])
     # Map the best candidate indices to the original indices in the sequence
     select_indices = (
         retrieve_indices[best_candidate, : accept_length + 1] + prev_input_len
     )
+    # print("select_indices:" , select_indices)
+    # print("len(select_indices)", len(select_indices))
     # Append the tokens from the best candidate to the input sequence
     input_ids = torch.cat(
         [input_ids, candidates[None, best_candidate, : accept_length + 1]], dim=-1
     )
-    # Update the past key values based on the selected tokens
-    # Source tensor that contains relevant past information based on the selected candidate
-    tgt = past_key_values_data[..., select_indices, :]
-    # Destination tensor where the relevant past information will be stored
-    dst = past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :]
-    # Copy relevant past information from the source to the destination
-    dst.copy_(tgt, non_blocking=True)
 
+    # print("prev_input_len: ", prev_input_len)
+    # print("select_indices: ", select_indices)
+    # print("best_candidate: ", best_candidate)
+    # print("accept_length: ", accept_length)
+    # print("retrieve_indices: ", retrieve_indices[best_candidate])
+
+    # for x in range(32) :
+    #     keys = past_key_values[x][0]
+    #     values = past_key_values[x][1]
+    #     # print("keys.shape", keys.shape)
+    #     # print("values.shape", values.shape)
+       
+    #     # print("select_indices", select_indices)
+    #     tgt_keys = keys[..., select_indices, :]
+    #     tgt_values = values[..., select_indices, :]
+
+    #     dst_keys = keys[..., prev_input_len : prev_input_len + tgt_keys.shape[-2], :]
+    #     dst_values = values[..., prev_input_len : prev_input_len + tgt_values.shape[-2], :]
+
+    #     dst_keys.copy_(tgt_keys)
+    #     dst_values.copy_(tgt_values)
+        
     # Update the current length tensor (currently only support batch size is 1)
-    current_length_data.fill_(prev_input_len + tgt.shape[-2])
-
+    # current_length_data.fill_(prev_input_len + len(select_indices))
+    
+   
     # Extract logits and medusa logits for the accepted tokens
     logits = logits[None, best_candidate, accept_length : accept_length + 1]
     medusa_logits = medusa_logits[
