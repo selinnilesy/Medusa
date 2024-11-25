@@ -295,15 +295,19 @@ class MedusaModelABC(nn.Module):
         # Initialize the past key and value states
         if hasattr(self, "past_key_values"):
             past_key_values = self.past_key_values
-            past_key_values_data = self.past_key_values_data
-            current_length_data = self.current_length_data
-            # Reset the past key and value states
-            current_length_data.zero_()
+            print("already initialized here !!!")
+            # past_key_values_data = self.past_key_values_data
+            # # print(past_key_values_data.shape)
+            # current_length_data = self.current_length_data
+            # # print(current_length_data)
+            # # Reset the past key and value states
+            # current_length_data.zero_()
+            # print(current_length_data)
         else:
             (
-                past_key_values,
+                past_key_values, 
                 past_key_values_data,
-                current_length_data,
+                current_length_data
             ) = initialize_past_key_values(self.base_model, context_len)
             self.past_key_values = past_key_values
             self.past_key_values_data = past_key_values_data
@@ -319,6 +323,7 @@ class MedusaModelABC(nn.Module):
 
         new_token = 0
         last_round_token = 0
+        print(medusa_logits)
 
         for idx in range(max_steps):
             # Generate candidates with topk predictions from Medusa heads
@@ -350,20 +355,21 @@ class MedusaModelABC(nn.Module):
                 logits, candidates, temperature, posterior_threshold, posterior_alpha, top_p=top_p, sampling=sampling, fast=fast
             )
 
+            with torch.inference_mode():
             # Update the input_ids and logits
-            input_ids, logits, medusa_logits, new_token = update_inference_inputs(
-                input_ids,
-                candidates,
-                best_candidate,
-                accept_length,
-                medusa_buffers["retrieve_indices"],
-                outputs,
-                logits,
-                medusa_logits,
-                new_token,
-                past_key_values_data,
-                current_length_data,
-            )
+                input_ids, logits, medusa_logits, new_token = update_inference_inputs(
+                    input_ids,
+                    candidates,
+                    best_candidate,
+                    accept_length,
+                    medusa_buffers["retrieve_indices"],
+                    outputs,
+                    logits,
+                    medusa_logits,
+                    new_token,
+                    past_key_values,
+                    self.current_length_data,
+                )
 
             yield {
                 "text": self.tokenizer.decode(

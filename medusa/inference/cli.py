@@ -22,6 +22,7 @@ from fastchat.model.model_adapter import get_conversation_template
 from fastchat.conversation import get_conv_template
 import json
 from medusa.model.medusa_model import MedusaModel
+# from medusa.model.monkeypatch import replace_llama
 import time
 import yaml
 from needle_in_a_haystack.prompt import Prompter
@@ -43,6 +44,7 @@ def main(args):
     else:
         raise ValueError(f"Invalid style for console: {args.style}")
     try:
+        # replace_llama()
         with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof1:
             with record_function("model_load"):
         
@@ -177,7 +179,7 @@ def main(args):
                             input_ids,
                             temperature=args.temperature,
                             max_steps=32,
-                            context_len=500,
+                            context_len=0,
                         )
                     )
                     end_time = time.time()  # Record the end time

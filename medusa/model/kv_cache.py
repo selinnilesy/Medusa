@@ -1,74 +1,15 @@
 import torch
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple, Union
+from packaging import version
+from transformers.utils import (
+    logging,
+)
+from transformers.cache_utils import Cache, DynamicCache
 
 
-class KVCache:
-    """
-    A key-value cache for the model.
 
-    This class provides a mechanism to maintain a growing cache of keys and values,
-    particularly useful for models that benefit from caching previous states,
-    like transformers during autoregressive decoding.
-
-    Attributes:
-        data (torch.Tensor): The tensor storing keys and values.
-        current_length (int): Current length of the data being stored.
-    """
-
-    def __init__(self, data, current_length):
-        """
-        Initialize the KVCache.
-
-        Args:
-            data (torch.Tensor): Initial tensor to store the keys and values.
-            current_length (int): Initial length of the data.
-        """
-        self.data = data
-        self.current_length = current_length
-
-    @property
-    def shape(self):
-        """Return the shape of the data tensor with updated length."""
-        return (
-            self.data.shape[0],
-            self.data.shape[1],
-            self.current_length,
-            self.data.shape[3],
-        )
-
-    def copy(self, indices: torch.Tensor, prev_length: int, dim: int = 2):
-        """
-        Copy values from the current data at specified indices to a new location.
-
-        Args:
-            indices (torch.Tensor): Indices of the data tensor to be copied.
-            prev_length (int): Previous length before adding new data.
-            dim (int, optional): Dimension along which copying should be performed. Default is 2.
-        """
-        tgt = self.data.index_select(dim, indices)
-        dst = self.data.narrow(dim, prev_length, tgt.shape[dim])
-        dst.copy_(tgt, non_blocking=True)
-        self.current_length.fill_(prev_length + tgt.shape[dim])
-
-    def cat(self, tensor: torch.Tensor, dim: int = 2):
-        """
-        Concatenate the given tensor with the current data.
-
-        Args:
-            tensor (torch.Tensor): The tensor to be concatenated.
-            dim (int, optional): The dimension along which concatenation should be done. Default is 2.
-
-        Returns:
-            torch.Tensor: The data tensor after concatenation up to the current length.
-        """
-        # dst = self.data.narrow(dim, self.current_length, tensor.shape[dim])
-        # dst.copy_(tensor)
-        # self.current_length += tensor.shape[dim]
-        # return torch.narrow(self.data, 2, 0, self.current_length)
-        self.current_length += tensor.shape[dim]
-        print(self.current_length)
-        self.data = torch.cat([self.data, tensor], dim=dim)
-        return self.data
-
+logger = logging.get_logger(__name__)
 
 def initialize_past_key_values(model, context_len):
     """
@@ -92,17 +33,16 @@ def initialize_past_key_values(model, context_len):
     batch_size = 1
     # Initializing a tensor to store past keys and values for all layers
     past_key_values_data = torch.zeros(
-        config.num_hidden_layers * 2,
-        batch_size,
-        config.num_key_value_heads,
-        0,
-        config.hidden_size // config.num_attention_heads,
-        device=model.device,
-        dtype=model.dtype,
-    )
+            config.num_hidden_layers * 2,
+            batch_size,
+            config.num_key_value_heads,
+            0,
+            config.hidden_size // config.num_attention_heads,
+            device=model.device,
+            dtype=model.dtype,
+        )
+
     print("context_len: ", context_len)
-    memory_size = torch.numel(past_key_values_data)*past_key_values_data.element_size()
-    print(f"past_key_values_data's memory_size: {memory_size}")
     print("max_position_embeddings:", config.max_position_embeddings)
     print("config.hidden_size // config.num_attention_heads:", config.hidden_size // config.num_attention_heads)
     # Initialize tensor to store the current length of the cached data for all layers.
@@ -111,12 +51,13 @@ def initialize_past_key_values(model, context_len):
         config.num_hidden_layers * 2, dtype=torch.long, device="cpu"
     )
     # Creating a KVCache for each pair of key and value in all layers
-    past_key_values = [] * config.num_hidden_layers
-    print("num_hidden_layers: ", config.num_hidden_layers)
+    # past_key_values = DynamicCache(config.num_hidden_layers)
+    past_key_values = DynamicCache()
     for i in range(config.num_hidden_layers):
-        past_key_values.append(
-            [
-                KVCache(past_key_values_data[2*i+j] , current_length_data[2*i+j]) for j in range(2)
-            ] 
+        past_key_values.update(
+            past_key_values_data[2*i ],
+            past_key_values_data[2*i + 1],
+            i
         )
+
     return past_key_values, past_key_values_data, current_length_data
