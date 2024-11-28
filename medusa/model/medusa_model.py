@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from .modeling_llama_kv import LlamaForCausalLM as KVLlamaForCausalLM
+from .modeling_llama_kv_snapkv2 import LlamaForCausalLM as KVLlamaForCausalLM
 from .modeling_mistral_kv import MistralForCausalLM as KVMistralForCausalLM
 # import transformers
 
@@ -16,7 +16,6 @@ from transformers import AutoTokenizer, AutoConfig
 import os
 from huggingface_hub import hf_hub_download
 import warnings
-
 class MedusaConfig(PretrainedConfig):
     """
     Configuration class for Medusa model.
@@ -97,7 +96,6 @@ class MedusaModelABC(nn.Module):
         """
         super().__init__(config)
         # For compatibility with the old APIs
-
         medusa_num_heads = config.medusa_num_heads
         medusa_num_layers = config.medusa_num_layers
         base_model_name_or_path = config._name_or_path
@@ -159,7 +157,7 @@ class MedusaModelABC(nn.Module):
                 filename = medusa_head_path
             else:
                 filename = hf_hub_download(pretrained_model_name_or_path, "medusa_lm_head.pt")
-            medusa_head_state_dict = torch.load(filename, map_location=model.device)
+            medusa_head_state_dict = torch.load(filename, map_location=model.device, weights_only=True)
             model.medusa_head.load_state_dict(medusa_head_state_dict, strict=False)
             return model
         
@@ -270,6 +268,7 @@ class MedusaModelABC(nn.Module):
 
         Warning: Only support batch size 1 for now!!
         """
+
         assert input_ids.shape[0] == 1, "Only support batch size 1 for now!!"
         # Avoid modifying the input_ids in-place
         input_ids = input_ids.clone()
@@ -361,7 +360,6 @@ class MedusaModelABC(nn.Module):
                 past_key_values_data,
                 current_length_data,
             )
-
             yield {
                 "text": self.tokenizer.decode(
                     input_ids[0, input_len:],
@@ -376,6 +374,12 @@ class MedusaModelABC(nn.Module):
 
 
 class MedusaModelLlama(MedusaModelABC, KVLlamaForCausalLM):
+    # print("inside model: ", self.tokenizer.decode(
+    #                 input_ids[0, input_len:],
+    #                 skip_special_tokens=True,
+    #                 spaces_between_special_tokens=False,
+    #                 clean_up_tokenization_spaces=True,
+    #             ))
     pass
 
 class MedusaModelMistral(MedusaModelABC, KVMistralForCausalLM):
