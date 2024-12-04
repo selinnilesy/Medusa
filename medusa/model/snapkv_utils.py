@@ -74,7 +74,7 @@ def init_snapkv(self):
         if not hasattr(self.config, 'window_size'):
             self.config.window_size = 32
         if not hasattr(self.config, 'max_capacity_prompt'):
-            self.config.max_capacity_prompt = 64
+            self.config.max_capacity_prompt = 1024
         if not hasattr(self.config, 'kernel_size'):
             self.config.kernel_size = 5
         if not hasattr(self.config, 'pooling'):

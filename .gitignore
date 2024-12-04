@@ -164,6 +164,7 @@ cython_debug/
 wandb/
 
 ShareGPT_Vicuna_unfiltered/
+axolotl/
 
 test_medusa*
 

@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 from transformers import PreTrainedModel, PretrainedConfig
-from .modeling_llama_kv import LlamaForCausalLM as KVLlamaForCausalLM
+# from .modeling_llama_kv import LlamaForCausalLM as KVLlamaForCausalLM
+from .modeling_llama_kv_snapkv2 import LlamaForCausalLM as KVLlamaForCausalLM
 from .utils import *
 from .kv_cache import initialize_past_key_values
 from .medusa_choices import mc_sim_7b_63
