@@ -1,6 +1,15 @@
 import torch
 import torch.nn.functional as F
 
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from torch.profiler import profile, record_function, ProfilerActivity
+
+prof_file = "chat_verifier_7b_pruned_decoder.csv"
+activities = [ProfilerActivity.CUDA]
+
 TOPK=10 # topk for sparse tree (10 is a placeholder and it is sufficient)
 
 def pad_path(path, length, pad_value=-2):
@@ -43,6 +52,7 @@ def generate_medusa_buffers(medusa_choices, device="cuda"):
 
     # Sort the medusa_choices based on their lengths and then their values
     sorted_medusa_choices = sorted(medusa_choices, key=lambda x: (len(x), x))
+    # print("sorted_medusa_choices: ", sorted_medusa_choices)
     medusa_len = len(sorted_medusa_choices) + 1
 
     # Initialize depth_counts to keep track of how many choices have a particular depth
@@ -75,6 +85,7 @@ def generate_medusa_buffers(medusa_choices, device="cuda"):
     medusa_tree_indices = torch.zeros(medusa_len, dtype=torch.long)
     medusa_tree_indices[0] = 0
     start = 0
+    # print("depth_counts ", depth_counts)
     for i in range(len(depth_counts)):
         for j in range(depth_counts[i]):
             cur_medusa_choice = sorted_medusa_choices[start + j]
@@ -91,25 +102,27 @@ def generate_medusa_buffers(medusa_choices, device="cuda"):
     # Generate retrieval indices for Medusa structure verification
     retrieve_indices_nest = []
     retrieve_paths = []
-    print("sorted_medusa_choices:", sorted_medusa_choices)
+    # print("sorted_medusa_choices: ", sorted_medusa_choices)
     for i in range(len(sorted_medusa_choices)):
         cur_medusa_choice = sorted_medusa_choices[-i-1]
+        # print("cur_medusa_choice: ", cur_medusa_choice)
         retrieve_indice = []
-        print("cur_medusa_choice:", cur_medusa_choice)
         if cur_medusa_choice in retrieve_paths:
             continue
         else:
             for c in range(len(cur_medusa_choice)):
                 retrieve_indice.append(sorted_medusa_choices.index(cur_medusa_choice[:c+1]))
-                print("retrieved_indice:", retrieve_indice[-1])
                 retrieve_paths.append(cur_medusa_choice[:c+1])
+                # print("retrieve_paths: ", retrieve_paths)
+                # print("retrieve_indice: ", retrieve_indice)
         retrieve_indices_nest.append(retrieve_indice)
+   
     max_length = max([len(x) for x in retrieve_indices_nest])
     retrieve_indices = [pad_path(path, max_length) for path in retrieve_indices_nest]
     retrieve_indices = torch.tensor(retrieve_indices, dtype=torch.long)
     retrieve_indices = retrieve_indices + 1
     retrieve_indices = torch.cat([torch.zeros((retrieve_indices.shape[0], 1), dtype=torch.long), retrieve_indices], dim=1)
-    print("retrieve_indices padded:", retrieve_indices)
+    print("retrieve_indices: ", retrieve_indices)
 
     # Aggregate the generated buffers into a dictionary
     medusa_buffers = {
@@ -259,7 +272,7 @@ def get_typical_one_token(logit, temperature, posterior_threshold, posterior_alp
     sampled_tokens = torch.multinomial(F.softmax(logit, dim=-1), 1)
     return sampled_tokens
 
-def generate_candidates(medusa_logits, logits, tree_indices, retrieve_indices, temperature = 0, posterior_threshold=0.3, posterior_alpha = 0.09, top_p=0.8, sampling = 'typical', fast = False):
+def generate_candidates(stepno, medusa_logits, logits, tree_indices, retrieve_indices, temperature = 0, posterior_threshold=0.3, posterior_alpha = 0.09, top_p=0.8, sampling = 'typical', fast = False):
     """
     Generate candidates based on provided logits and indices.
     
@@ -290,23 +303,68 @@ def generate_candidates(medusa_logits, logits, tree_indices, retrieve_indices, t
             candidates_logit = get_nucleus_one_token(logits[:, -1], temperature, top_p).squeeze(0)
         else:
             raise NotImplementedError
+        
     # Extract the TOPK candidates from the medusa logits.
-    candidates_medusa_logits = torch.topk(medusa_logits[:, 0, -1], TOPK, dim = -1).indices
+
+    
+    
+    topk = torch.topk(medusa_logits[:, 0, -1], TOPK, dim = -1)
+    # print("topk.values:", topk.values)
+    candidates_medusa_logits = topk.indices
+    # print("topk.indices: ", topk.indices)
+    # print("candidates_logit shape", candidates_logit.shape)
 
     # Combine the selected candidate from the original logits with the topk medusa logits.
     candidates = torch.cat([candidates_logit, candidates_medusa_logits.view(-1)], dim=-1)
+    # print("candidates_logit.shape: ", candidates_logit.shape)
+    max_val = torch.max(logits.view(-1)).unsqueeze(0)
+    # print("topk.values: ", topk.values)
+    candidates_values = torch.cat([max_val, topk.values.view(-1)], dim=-1) 
+    
 
     # Map the combined candidates to the tree indices to get tree candidates.
     tree_candidates = candidates[tree_indices]
+    filtered_values = candidates_values[tree_indices]
 
     # Extend the tree candidates by appending a zero.
     tree_candidates_ext = torch.cat([tree_candidates, torch.zeros((1), dtype=torch.long, device=tree_candidates.device)], dim=0)
+    filtered_values_ext = torch.cat([filtered_values, torch.zeros((1), dtype=torch.long, device=filtered_values.device)], dim=0)
 
     # Retrieve the cartesian candidates using the retrieve indices.
     cart_candidates = tree_candidates_ext[retrieve_indices]
+    # print("cart_candidates shape: ", cart_candidates.shape)
+    filtered_values = filtered_values_ext[retrieve_indices]
+
+    # Create a heatmap
+    # Find which indices from topk.indices match the indexes_to_keep
+    filtered_values = filtered_values.detach().cpu()
+    # print("filtered_values shape: ", filtered_values.shape)
+
+    # # Normalize the filtered values
+    # normalized_tensor = F.normalize(filtered_values, p=2, dim=1)  # Normalize along the rows (dim=1)
+    normalized_tensor = filtered_values / filtered_values.norm(dim=1)[:, None]
+    # # print("normalized_tensor shape: ", normalized_tensor.shape)
+
+    # Compute pairwise cosine similarity for the normalized tensor
+    cosine_sim = torch.mm(normalized_tensor, normalized_tensor.transpose(0,1))
+    # print("cosine_sim: ", cosine_sim)  
+
+    # Create the heatmap with larger elements
+    plt.figure(figsize=(12, 8), dpi=200)  # Increase figsize and dpi for larger heatmap
+    sns.heatmap(cosine_sim, annot=False, cmap="inferno", cbar=True, vmin=0, vmax=1, annot_kws={'size': 10})  # Adjust annotation size
+
+
+    # # Set labels and title
+    plt.title("Normalized Heatmap")
+    plt.xlabel("Column")
+    plt.ylabel("Row")
+
+    # Show the plot
+    plt.savefig(f"similarity_matrix-{stepno}.png", dpi=300, bbox_inches="tight")
 
     # Unsqueeze the tree candidates for dimension consistency.
-    tree_candidates = tree_candidates.unsqueeze(0)
+    tree_candidates = tree_candidates.unsqueeze(0)  
+    
     return cart_candidates, tree_candidates
 
 
@@ -338,6 +396,8 @@ def tree_decoding(
 
     # Use the model to decode the tree candidates. 
     # The model is expected to return logits for the Medusa structure, original logits, and possibly other outputs.
+    # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof:
+    #     with record_function("verifier"):
     tree_medusa_logits, outputs, tree_logits = model(
         tree_candidates,
         output_orig=True,
@@ -345,10 +405,17 @@ def tree_decoding(
         position_ids=position_ids,
         medusa_forward=True,
     )
+    # print("verified tree_medusa_logits: ", tree_medusa_logits)
+    # with open(prof_file, 'a+') as pf:
+    #     pf.write(prof.key_averages().table())
+
+    # print("verified logits before indexing", tree_logits.shape)
+    # print("retrieve_indices", retrieve_indices.shape)
     
     # Reorder the obtained logits based on the retrieve_indices to ensure consistency with some reference ordering.
     logits = tree_logits[0, retrieve_indices]
     medusa_logits = tree_medusa_logits[:, 0, retrieve_indices]
+    # print("verified logits after indexing", logits.shape)
     return medusa_logits, logits, outputs
 
 def get_nucleus_posterior_mask(logits, candidates, temperature, top_p):
@@ -471,7 +538,6 @@ def evaluate_posterior(
         if accept_length == 0:
             # Default to the first candidate if none are accepted
             best_candidate = torch.tensor(0, dtype=torch.long, device=candidates.device)
-            print("defaulting to the first candidate sequence")
         else:
             best_candidate = torch.argmax(candidates_accept_length).to(torch.long)
         return best_candidate, accept_length
@@ -483,6 +549,8 @@ def evaluate_posterior(
             candidates_prob = torch.gather(
                 posterior_prob, dim=-1, index=candidates[:, 1:].unsqueeze(-1)
             ).squeeze(-1)
+            # print("posterior_prob shape", posterior_prob.shape)
+            print("candidates_prob shape", candidates_prob.shape)
             posterior_entropy = -torch.sum(
                 posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
             )  # torch.sum(torch.log(*)) is faster than torch.prod
@@ -544,7 +612,7 @@ def update_inference_inputs(
     logits,
     medusa_logits,
     new_token,
-    past_key_values,
+    past_key_values_data,
     current_length_data,
 ):
     """
@@ -569,48 +637,25 @@ def update_inference_inputs(
     """
     # Calculate the starting position for new tokens based on the previous input length
     prev_input_len = input_ids.shape[1]
-    # print("prev_input_len", prev_input_len)
-    # print("best_candidate", best_candidate)
-    # print("accept_length", accept_length)
-    # print("previous outputs", outputs)
-    # print("retrieved_indices", retrieve_indices[best_candidate, : accept_length + 1])
     # Map the best candidate indices to the original indices in the sequence
     select_indices = (
         retrieve_indices[best_candidate, : accept_length + 1] + prev_input_len
     )
-    # print("select_indices:" , select_indices)
-    # print("len(select_indices)", len(select_indices))
     # Append the tokens from the best candidate to the input sequence
     input_ids = torch.cat(
         [input_ids, candidates[None, best_candidate, : accept_length + 1]], dim=-1
     )
+    # Update the past key values based on the selected tokens
+    # Source tensor that contains relevant past information based on the selected candidate
+    tgt = past_key_values_data[..., select_indices, :]
+    # Destination tensor where the relevant past information will be stored
+    dst = past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :]
+    # Copy relevant past information from the source to the destination
+    dst.copy_(tgt, non_blocking=True)
 
-    # print("prev_input_len: ", prev_input_len)
-    # print("select_indices: ", select_indices)
-    # print("best_candidate: ", best_candidate)
-    # print("accept_length: ", accept_length)
-    # print("retrieve_indices: ", retrieve_indices[best_candidate])
-
-    # for x in range(32) :
-    #     keys = past_key_values[x][0]
-    #     values = past_key_values[x][1]
-    #     # print("keys.shape", keys.shape)
-    #     # print("values.shape", values.shape)
-       
-    #     # print("select_indices", select_indices)
-    #     tgt_keys = keys[..., select_indices, :]
-    #     tgt_values = values[..., select_indices, :]
-
-    #     dst_keys = keys[..., prev_input_len : prev_input_len + tgt_keys.shape[-2], :]
-    #     dst_values = values[..., prev_input_len : prev_input_len + tgt_values.shape[-2], :]
-
-    #     dst_keys.copy_(tgt_keys)
-    #     dst_values.copy_(tgt_values)
-        
     # Update the current length tensor (currently only support batch size is 1)
-    # current_length_data.fill_(prev_input_len + len(select_indices))
-    
-   
+    current_length_data.fill_(prev_input_len + tgt.shape[-2])
+
     # Extract logits and medusa logits for the accepted tokens
     logits = logits[None, best_candidate, accept_length : accept_length + 1]
     medusa_logits = medusa_logits[
@@ -618,5 +663,8 @@ def update_inference_inputs(
     ]
     # Update the new token counter
     new_token += accept_length + 1
+
+    # print("final logits shape:", logits.shape)
+    # print("final medusa_logits shape:", medusa_logits.shape)
 
     return input_ids, logits, medusa_logits, new_token

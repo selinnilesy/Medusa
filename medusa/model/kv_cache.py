@@ -1,17 +1,95 @@
 import torch
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
-from packaging import version
-from transformers.utils import (
-    logging,
-)
-from transformers.cache_utils import Cache, DynamicCache
 
 
+class KVCache:
+    """
+    A key-value cache for the model.
 
-logger = logging.get_logger(__name__)
+    This class provides a mechanism to maintain a growing cache of keys and values,
+    particularly useful for models that benefit from caching previous states,
+    like transformers during autoregressive decoding.
 
-def initialize_past_key_values(model, context_len):
+    Attributes:
+        data (torch.Tensor): The tensor storing keys and values.
+        current_length (int): Current length of the data being stored.
+    """
+
+    def __init__(self, data, current_length):
+        """
+        Initialize the KVCache.
+
+        Args:
+            data (torch.Tensor): Initial tensor to store the keys and values.
+            current_length (int): Initial length of the data.
+        """
+        self.data = data
+        self.current_length = current_length
+
+    @property
+    def shape(self):
+        """Return the shape of the data tensor with updated length."""
+        return (
+            self.data.shape[0],
+            self.data.shape[1],
+            self.current_length.item(),
+            self.data.shape[3],
+        )
+
+    def copy(self, indices: torch.Tensor, prev_length: int, dim: int = 2):
+        """
+        Copy values from the current data at specified indices to a new location.
+
+        Args:
+            indices (torch.Tensor): Indices of the data tensor to be copied.
+            prev_length (int): Previous length before adding new data.
+            dim (int, optional): Dimension along which copying should be performed. Default is 2.
+        """
+        tgt = self.data.index_select(dim, indices)
+        dst = self.data.narrow(dim, prev_length, tgt.shape[dim])
+        dst.copy_(tgt, non_blocking=True)
+        self.current_length.fill_(prev_length + tgt.shape[dim])
+
+    def cat(self, tensor: torch.Tensor, dim: int = 2):
+        """
+        Concatenate the given tensor with the current data.
+
+        Args:
+            tensor (torch.Tensor): The tensor to be concatenated.
+            dim (int, optional): The dimension along which concatenation should be done. Default is 2.
+
+        Returns:
+            torch.Tensor: The data tensor after concatenation up to the current length.
+        """
+        # if self.current_length + tensor.shape[dim] >= 2048:
+        #     # 0 - 1948
+        #     copy_tensor = self.data.clone()
+        #     # dst1 = self.data.narrow(dim, 0, 2048 - tensor.shape[dim])
+        #     tgt1 = copy_tensor.narrow(dim, tensor.shape[dim], 2048 - tensor.shape[dim])
+        #     # copy 100-2048 to 0 - 1948
+        #     self.data[..., :2048 - tensor.shape[dim], :].copy_(tgt1)
+        #     # 1948 - 2048 new tensor of length 100
+        #     # dst2 = self.data.narrow(dim, 2048 - tensor.shape[dim], tensor.shape[dim])
+        #     self.data[..., 2048 - tensor.shape[dim]: , :].copy_(tensor)
+        #     if self.current_length >= 2048:
+        #         self.current_length.add_(0)
+        #     else:
+        #         self.current_length.add_(2048-self.current_length)
+        #     # print("new kv length: " , self.current_length)
+        #     return torch.narrow(self.data, 2, 0, 2048)
+        # else:
+        #     dst = self.data.narrow(dim, self.current_length, tensor.shape[dim])
+        #     dst.copy_(tensor)
+        #     self.current_length.add_(tensor.shape[dim])
+        #     # print("new kv length: " , self.current_length)
+        #     return torch.narrow(self.data, 2, 0, self.current_length)
+        dst = self.data.narrow(dim, self.current_length, tensor.shape[dim])
+        dst.copy_(tensor)
+        self.current_length.add_(tensor.shape[dim])
+        # print("KV current_length: ", self.current_length)
+        return torch.narrow(self.data, 2, 0, self.current_length)
+
+
+def initialize_past_key_values(model):
     """
     Initialize past key and value states for a given transformer model.
 
@@ -33,31 +111,29 @@ def initialize_past_key_values(model, context_len):
     batch_size = 1
     # Initializing a tensor to store past keys and values for all layers
     past_key_values_data = torch.zeros(
-            config.num_hidden_layers * 2,
-            batch_size,
-            config.num_key_value_heads,
-            0,
-            config.hidden_size // config.num_attention_heads,
-            device=model.device,
-            dtype=model.dtype,
-        )
-
-    print("context_len: ", context_len)
-    print("max_position_embeddings:", config.max_position_embeddings)
-    print("config.hidden_size // config.num_attention_heads:", config.hidden_size // config.num_attention_heads)
+        config.num_hidden_layers * 2,
+        batch_size,
+        config.num_key_value_heads,
+        config.max_position_embeddings,
+        config.hidden_size // config.num_attention_heads,
+        device=model.device,
+        dtype=model.dtype,
+    )
+    print(config.num_key_value_heads)
+    print(config.max_position_embeddings)
+    print(config.hidden_size // config.num_attention_heads)
     # Initialize tensor to store the current length of the cached data for all layers.
     # [IMPORTANT] It needs to be kept on CPU for quick access and updates.
     current_length_data = torch.zeros(
         config.num_hidden_layers * 2, dtype=torch.long, device="cpu"
     )
     # Creating a KVCache for each pair of key and value in all layers
-    # past_key_values = DynamicCache(config.num_hidden_layers)
-    past_key_values = DynamicCache()
+    past_key_values = [] * config.num_hidden_layers
     for i in range(config.num_hidden_layers):
-        past_key_values.update(
-            past_key_values_data[2*i ],
-            past_key_values_data[2*i + 1],
-            i
+        past_key_values.append(
+            [
+                KVCache(past_key_values_data[i * 2 + j], current_length_data[i * 2 + j])
+                for j in range(2)
+            ]
         )
-
     return past_key_values, past_key_values_data, current_length_data

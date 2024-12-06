@@ -8,7 +8,7 @@ from .modeling_mistral_kv import MistralForCausalLM as KVMistralForCausalLM
 # transformers.models.llama.modeling_llama.LlamaForCausalLM = KVLlamaForCausalLM
 # transformers.models.mistral.modeling_mistral.MistralForCausalLM = KVMistralForCausalLM
 
-from transformers import PreTrainedModel, PretrainedConfig
+from transformers import PreTrainedModel, PretrainedConfig, BitsAndBytesConfig
 from .utils import *
 from .kv_cache import initialize_past_key_values
 from .medusa_choices import *
@@ -16,6 +16,19 @@ from transformers import AutoTokenizer, AutoConfig
 import os
 from huggingface_hub import hf_hub_download
 import warnings
+from torch.quantization import prepare, convert
+# import bitsandbytes as bnb
+
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+
+from torch.profiler import profile, record_function, ProfilerActivity
+
+# prof_file = "chat_verifier_7b_orig_decoder.csv"
+# prof_fileinit = "medusa_init_pruned.csv"
+# prof_filedecoder = "medusa_outdecoder_pruned.csv"
+activities = [ProfilerActivity.CUDA]
+
+# quantization_config = BitsAndBytesConfig(load_in_8bit=True)
 
 class MedusaConfig(PretrainedConfig):
     """
@@ -53,11 +66,11 @@ class ResBlock(nn.Module):
 
     def __init__(self, hidden_size):
         super().__init__()
-        self.linear = nn.Linear(hidden_size, hidden_size)
+        self.linear = nn.Linear(hidden_size, hidden_size).to(torch.float16)
         # Initialize as an identity mapping
-        torch.nn.init.zeros_(self.linear.weight)
+        torch.nn.init.zeros_(self.linear.weight).to(torch.float16)
         # Use SiLU activation to keep consistent with the Llama model
-        self.act = nn.SiLU()
+        self.act = nn.SiLU().to(torch.float16)
 
     def forward(self, x):
         """
@@ -69,6 +82,7 @@ class ResBlock(nn.Module):
         Returns:
             torch.Tensor: Output after the residual connection and activation.
         """
+        x = x.to(torch.float16)  # or torch.float16 
         return x + self.act(self.linear(x))
 
 
@@ -108,15 +122,16 @@ class MedusaModelABC(nn.Module):
         self.base_model_name_or_path = base_model_name_or_path
         self.tokenizer = AutoTokenizer.from_pretrained(self.base_model_name_or_path)
         # Create a list of Medusa heads
-        self.medusa_head = nn.ModuleList(
-            [
-                nn.Sequential(
-                    *([ResBlock(self.hidden_size)] * medusa_num_layers),
-                    nn.Linear(self.hidden_size, self.vocab_size, bias=False),
-                )
-                for _ in range(medusa_num_heads)
-            ]
-        )
+        
+        # self.medusa_head_quant = nn.ModuleList(
+        #     [
+        #         nn.Sequential(
+        #             *([ResBlock(self.hidden_size)] * medusa_num_layers),
+        #             bnb.nn.Linear4bit(self.hidden_size, self.vocab_size, bias=False),
+        #         )
+        #         for _ in range(medusa_num_heads)
+        #     ]
+        # )
     # Add a link named base_model to self
     @property
     def base_model(self):
@@ -127,6 +142,7 @@ class MedusaModelABC(nn.Module):
         pretrained_model_name_or_path,
         *args,
         **kwargs,
+
     ):
         # Manually load config to ensure that the medusa_num_heads parameter is loaded
         try:
@@ -135,32 +151,50 @@ class MedusaModelABC(nn.Module):
                 pretrained_model_name_or_path,
                 *args,
                 **kwargs,
-                config=config,
             )
         except:
             config = MedusaConfig.from_pretrained(pretrained_model_name_or_path)
-           
-            config.no_flash_attn = True
-            # config._attn_implementation = "eager"
-            # print("info: " , config.no_flash_attn)
             base_model_config = AutoConfig.from_pretrained(config.base_model_name_or_path)
             base_model_config.medusa_num_heads = 5 # TODO: fix the uploaded config (only include 2 heads)
             base_model_config.medusa_num_layers = config.medusa_num_layers
-            # base_model_config._attn_implementation = "eager"
-            # print("info: " , base_model_config._attn_implementation)
+
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,  # Computation dtype
+                bnb_4bit_use_double_quant=True,       # Use double quantization
+                bnb_4bit_quant_type="nf4",            # Quantization type (e.g., 'nf4' or 'fp4')
+            )
+            
             model = super().from_pretrained(
                 config.base_model_name_or_path,
                 *args,
                 **kwargs,
                 config=base_model_config,
+                quantization_config=quantization_config,
             )
+
+            model.medusa_head = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        *([ResBlock(model.hidden_size)] * model.medusa_num_layers),
+                        nn.Linear(model.hidden_size, model.vocab_size, bias=False, dtype=torch.float16),
+                    )
+                    for _ in range(model.medusa)
+                ]
+            ).to("cuda:0")
+
             medusa_head_path = os.path.join(pretrained_model_name_or_path, "medusa_lm_head.pt")
             if os.path.exists(medusa_head_path):
                 filename = medusa_head_path
             else:
                 filename = hf_hub_download(pretrained_model_name_or_path, "medusa_lm_head.pt")
+                    
+            # Load the state dictionary for medusa_head
+            # print(model.device)
             medusa_head_state_dict = torch.load(filename, map_location=model.device)
-            model.medusa_head.load_state_dict(medusa_head_state_dict, strict=False)
+            model.medusa_head.load_state_dict(medusa_head_state_dict)
+            # model.medusa_head_quant = model.medusa_head_quant.to(0) # Quantization happens here
+            
             return model
         
 
@@ -243,7 +277,7 @@ class MedusaModelABC(nn.Module):
         input_ids,
         attention_mask=None,
         temperature=0.0,
-        max_steps=32,
+        max_steps=4096,
         # The hyperparameters below are for the Medusa
         # top-1 prediciton for the next token, top-7 predictions for the next token, top-6 predictions for the next next token.
         medusa_choices=None,
@@ -252,8 +286,7 @@ class MedusaModelABC(nn.Module):
         posterior_alpha=0.3,
         top_p=0.8, 
         sampling = 'typical', 
-        fast = True,
-        **kwargs,
+        fast = True
     ):
         """
         Args:
@@ -287,28 +320,23 @@ class MedusaModelABC(nn.Module):
             medusa_buffers = generate_medusa_buffers(
                 medusa_choices, device=self.base_model.device
             )
+            # print("generate_medusa_buffers called")
         self.medusa_buffers = medusa_buffers
         self.medusa_choices = medusa_choices
-
-        context_len = kwargs.get("context_len", 2048)
 
         # Initialize the past key and value states
         if hasattr(self, "past_key_values"):
             past_key_values = self.past_key_values
-            print("already initialized here !!!")
-            # past_key_values_data = self.past_key_values_data
-            # # print(past_key_values_data.shape)
-            # current_length_data = self.current_length_data
-            # # print(current_length_data)
-            # # Reset the past key and value states
-            # current_length_data.zero_()
-            # print(current_length_data)
+            past_key_values_data = self.past_key_values_data
+            current_length_data = self.current_length_data
+            # Reset the past key and value states
+            current_length_data.zero_()
         else:
             (
-                past_key_values, 
+                past_key_values,
                 past_key_values_data,
-                current_length_data
-            ) = initialize_past_key_values(self.base_model, context_len)
+                current_length_data,
+            ) = initialize_past_key_values(self.base_model)
             self.past_key_values = past_key_values
             self.past_key_values_data = past_key_values_data
             self.current_length_data = current_length_data
@@ -317,23 +345,25 @@ class MedusaModelABC(nn.Module):
 
         reset_medusa_mode(self)
         # Initialize tree attention mask and process prefill tokens
+        # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof1:
+        #     with record_function("init"):
         medusa_logits, logits = initialize_medusa(
             input_ids, self, medusa_buffers["medusa_attn_mask"], past_key_values
         )
+        # with open(prof_fileinit, 'a+') as pf:
+        #         pf.write(prof1.key_averages().table())
 
         new_token = 0
         last_round_token = 0
+        stepno = 0
 
-        for idx in range(max_steps):
-            print("Step #", idx)
-
-            # stream = torch.cuda.Stream()
-            # with torch.cuda.stream(stream):
+        # for idx in range(max_steps):
+        while(1):
+            stepno+=1
+           
             # Generate candidates with topk predictions from Medusa heads
-
-            # top k  of medusa_logits per head is appended to top result of logit
-            # these candidates are converted to tree structure with tree indices buffer
             candidates, tree_candidates = generate_candidates(
+                stepno,
                 medusa_logits,
                 logits,
                 medusa_buffers["tree_indices"],
@@ -345,16 +375,9 @@ class MedusaModelABC(nn.Module):
                 sampling=sampling,
                 fast=fast,
             )
-            x = self.tokenizer.decode(
-                    input_ids[0, input_len:],
-                    skip_special_tokens=True,
-                    spaces_between_special_tokens=False,
-                    clean_up_tokenization_spaces=True,)
 
             # Use tree attention to verify the candidates and get predictions
-
-            # tree_candidates are input ids to medusa model.
-            # model here returns verified sequences as medusa_logits for all candidates
+            
             medusa_logits, logits, outputs = tree_decoding(
                 self,
                 tree_candidates,
@@ -363,30 +386,29 @@ class MedusaModelABC(nn.Module):
                 input_ids,
                 medusa_buffers["retrieve_indices"],
             )
-            
-            # stream.synchronize()
-            # candidates_cpu = candidates.to(device='cpu')
+
             # Evaluate the posterior of the candidates to select the accepted candidate prefix
             best_candidate, accept_length = evaluate_posterior(
                 logits, candidates, temperature, posterior_threshold, posterior_alpha, top_p=top_p, sampling=sampling, fast=fast
             )
 
-            with torch.inference_mode():
             # Update the input_ids and logits
-                input_ids, logits, medusa_logits, new_token = update_inference_inputs(
-                    input_ids,
-                    candidates,
-                    best_candidate,
-                    accept_length,
-                    medusa_buffers["retrieve_indices"],
-                    outputs,
-                    logits,
-                    medusa_logits,
-                    new_token,
-                    past_key_values,
-                    self.current_length_data,
-                )
+            input_ids, logits, medusa_logits, new_token = update_inference_inputs(
+                input_ids,
+                candidates,
+                best_candidate,
+                accept_length,
+                medusa_buffers["retrieve_indices"],
+                outputs,
+                logits,
+                medusa_logits,
+                new_token,
+                past_key_values_data,
+                current_length_data,
+            )
 
+            # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof2:
+            #     with record_function("decoder"):
             yield {
                 "text": self.tokenizer.decode(
                     input_ids[0, input_len:],
@@ -395,10 +417,11 @@ class MedusaModelABC(nn.Module):
                     clean_up_tokenization_spaces=True,
                 )
             }
+            # with open(prof_filedecoder, 'a+') as pf:
+            #     pf.write(prof2.key_averages().table())
 
             if self.tokenizer.eos_token_id in input_ids[0, input_len:]:
                 break
-
 
 class MedusaModelLlama(MedusaModelABC, KVLlamaForCausalLM):
     pass

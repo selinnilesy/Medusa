@@ -1,0 +1,1094 @@
+[33mcommit 62b82af40f39ffb26523618b631a7fa92338bf1a[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: Selin <syildirim@nvidia.com>
+Date:   Mon Nov 25 15:33:17 2024 -0800
+
+    medusa with dynamic cache merged
+
+[1mdiff --git a/inference_script.py b/inference_script.py[m
+[1mnew file mode 100644[m
+[1mindex 0000000..05851ef[m
+[1m--- /dev/null[m
+[1m+++ b/inference_script.py[m
+[36m@@ -0,0 +1,92 @@[m
+[32m+[m[32m# Adapted from: https://github.com/lm-sys/FastChat/blob/main/fastchat/serve/cli.py[m
+[32m+[m[32m"""[m
+[32m+[m[32mChat with a model with command line interface.[m
+[32m+[m
+[32m+[m[32mUsage:[m
+[32m+[m[32mpython3 -m medusa.inference.cli --model <model_name_or_path>[m
+[32m+[m[32mOther commands:[m
+[32m+[m[32m- Type "!!exit" or an empty line to exit.[m
+[32m+[m[32m- Type "!!reset" to start a new conversation.[m
+[32m+[m[32m- Type "!!remove" to remove the last prompt.[m
+[32m+[m[32m- Type "!!regen" to regenerate the last message.[m
+[32m+[m[32m- Type "!!save <filename>" to save the conversation history to a json file.[m
+[32m+[m[32m- Type "!!load <filename>" to load a conversation history from a json file.[m
+[32m+[m[32m"""[m
+[32m+[m[32mimport os[m
+[32m+[m[32mos.environ["CUDA_VISIBLE_DEVICES"]="0"[m
+[32m+[m[32mimport argparse[m
+[32m+[m[32mimport os[m
+[32m+[m[32mimport re[m
+[32m+[m[32mimport sys[m
+[32m+[m[32mimport torch[m
+[32m+[m[32mfrom fastchat.serve.cli import SimpleChatIO, RichChatIO, ProgrammaticChatIO[m
+[32m+[m[32mfrom fastchat.model.model_adapter import get_conversation_template[m
+[32m+[m[32mfrom fastchat.conversation import get_conv_template[m
+[32m+[m[32mimport json[m
+[32m+[m[32mfrom medusa.model.medusa_model import MedusaModel[m
+[32m+[m[32mimport time[m
+[32m+[m[32mimport yaml[m
+[32m+[m[32m# from needle_in_a_haystack.prompt import Prompter[m
+[32m+[m
+[32m+[m[32m# from torch.profiler import profile, record_function, ProfilerActivity[m
+[32m+[m
+[32m+[m[32mparser = argparse.ArgumentParser()[m
+[32m+[m[32mparser.add_argument("--model", type=str, required=True, help="Model name or path.")[m
+[32m+[m[32mparser.add_argument([m
+[32m+[m[32m        "--load-in-8bit", action="store_true", help="Use 8-bit quantization"[m
+[32m+[m[32m    )[m
+[32m+[m[32mparser.add_argument([m
+[32m+[m[32m        "--load-in-4bit", action="store_true", help="Use 4-bit quantization"[m
+[32m+[m[32m    )[m
+[32m+[m[32mparser.add_argument("--temperature", type=float, default=0.7)[m
+[32m+[m[32mparser.add_argument("--input_file", type=str)[m
+[32m+[m
+[32m+[m[32margs = parser.parse_args()[m
+[32m+[m
+[32m+[m[32m# load model and tokenizer[m
+[32m+[m[32mmodel = MedusaModel.from_pretrained([m
+[32m+[m[32m    args.model,[m
+[32m+[m[32m    torch_dtype=torch.float16,[m
+[32m+[m[32m    low_cpu_mem_usage=True,[m
+[32m+[m[32m    device_map="auto",[m
+[32m+[m[32m    load_in_8bit=args.load_in_8bit,[m
+[32m+[m[32m    load_in_4bit=args.load_in_4bit,[m
+[32m+[m[32m)[m
+[32m+[m
+[32m+[m[32mtokenizer = model.get_tokenizer()[m
+[32m+[m
+[32m+[m[32mif args.input_file is not None:[m
+[32m+[m[32m    # load question from a file[m
+[32m+[m[32m    with open(args.input_file, 'r') as pf:[m
+[32m+[m[32m            question = pf.read()[m
+[32m+[m[32melse:[m
+[32m+[m[32m    # self-defined question[m
+[32m+[m[32m    question = "Self-correction is an approach to improving responses from large language models (LLMs) by refining the responses using LLMs during inference. Prior work has proposed various self-correction frameworks using different sources of feedback, including self-evaluation and external feedback. However, there is still no consensus on the question of when LLMs can correct their own mistakes, as recent studies also report negative results. In this work, we critically survey broad papers and discuss the conditions required for successful selfcorrection. We first find that prior studies often do not define their research questions in detail and involve impractical frameworks or unfair evaluations that over-evaluate selfcorrection. To tackle these issues, we categorize research questions in self-correction research and provide a checklist for designing appropriate experiments. Our critical survey based on the newly categorized research questions shows that (1) no prior work demonstrates successful self-correction with feedback from prompted LLMs, except for studies in tasks that are exceptionally suited for self-correction, (2) self-correction works well in tasks that can use reliable external feedback, and (3) large-scale fine-tuning enables self-correction."[m
+[32m+[m
+[32m+[m[32m# start a new conversation[m
+[32m+[m[32mconv = get_conversation_template(args.model)[m
+[32m+[m[32mconv.append_message(conv.roles[0], question)[m
+[32m+[m[32mconv.append_message(conv.roles[1], None)[m
+[32m+[m[32mprompt = conv.get_prompt()[m
+[32m+[m
+[32m+[m[32m# encode prompt[m
+[32m+[m[32minput_ids = tokenizer.encode(prompt, return_tensors="pt").to([m
+[32m+[m[32m        model.base_model.device[m
+[32m+[m[32m)[m
+[32m+[m[32minput_len = input_ids.shape[1][m
+[32m+[m
+[32m+[m[32m# start generating with medusa with initialization[m
+[32m+[m[32m# actual generation start from medusa_model.py line 319[m
+[32m+[m[32moutputs = model.medusa_generate([m
+[32m+[m[32m                input_ids,[m
+[32m+[m[32m                temperature=args.temperature,[m
+[32m+[m[32m                max_steps=512,[m
+[32m+[m[32m)[m
+[32m+[m
+[32m+[m
+[32m+[m[32m# decode and output[m
+[32m+[m[32mresponse = ""[m
+[32m+[m[32mfor output in outputs:[m
+[32m+[m[32m    response = output['text'][m
+[32m+[m[32m    time.sleep(0.01)[m
+[32m+[m[32mprint("response:", response.strip())[m
+\ No newline at end of file[m
+[1mdiff --git a/medusa/inference/cli.py b/medusa/inference/cli.py[m
+[1mindex 927e893..7bd13b4 100644[m
+[1m--- a/medusa/inference/cli.py[m
+[1m+++ b/medusa/inference/cli.py[m
+[36m@@ -22,6 +22,7 @@[m [mfrom fastchat.model.model_adapter import get_conversation_template[m
+ from fastchat.conversation import get_conv_template[m
+ import json[m
+ from medusa.model.medusa_model import MedusaModel[m
+[32m+[m[32m# from medusa.model.monkeypatch import replace_llama[m
+ import time[m
+ import yaml[m
+ from needle_in_a_haystack.prompt import Prompter[m
+[36m@@ -43,23 +44,24 @@[m [mdef main(args):[m
+     else:[m
+         raise ValueError(f"Invalid style for console: {args.style}")[m
+     try:[m
+[31m-        # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof1:[m
+[31m-        #     with record_function("model_load"):[m
+[32m+[m[32m        # replace_llama()[m
+[32m+[m[32m        with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof1:[m
+[32m+[m[32m            with record_function("model_load"):[m
+         [m
+         # torch.cuda.memory._record_memory_history([m
+         #     max_entries=INT_MAX[m
+[31m-        # )[m
+[32m+[m[32m        # )][m
+        [m
+[31m-        model = MedusaModel.from_pretrained([m
+[31m-            args.model,[m
+[31m-            torch_dtype=torch.float16,[m
+[31m-            low_cpu_mem_usage=True,[m
+[31m-            device_map="auto",[m
+[31m-            load_in_8bit=args.load_in_8bit,[m
+[31m-            load_in_4bit=args.load_in_4bit,[m
+[31m-        )[m
+[32m+[m[32m                model = MedusaModel.from_pretrained([m
+[32m+[m[32m                    args.model,[m
+[32m+[m[32m                    torch_dtype=torch.float16,[m
+[32m+[m[32m                    low_cpu_mem_usage=True,[m
+[32m+[m[32m                    device_map="auto",[m
+[32m+[m[32m                    load_in_8bit=args.load_in_8bit,[m
+[32m+[m[32m                    load_in_4bit=args.load_in_4bit,[m
+[32m+[m[32m                )[m
+ [m
+[31m-        tokenizer = model.get_tokenizer()[m
+[32m+[m[32m                tokenizer = model.get_tokenizer()[m
+ [m
+         # torch.cuda.memory._record_memory_history(enabled=None)[m
+         # try:[m
+[36m@@ -94,8 +96,9 @@[m [mdef main(args):[m
+             prompter = Prompter([m
+                 tokenizer[m
+             )[m
+[31m-            context = prompter.generate_context(300, 50)[m
+[31m-            inp = prompter.generate_prompt(context, 300, 50)[m
+[32m+[m[32m            context_len=500[m
+[32m+[m[32m            context = prompter.generate_context(context_len, 50)[m
+[32m+[m[32m            inp = prompter.generate_prompt(context, context_len, 50)[m
+ [m
+             # torch.cuda.memory._record_memory_history(enabled=None)[m
+             # try:[m
+[36m@@ -143,23 +146,25 @@[m [mdef main(args):[m
+             input_ids = tokenizer.encode(prompt, return_tensors="pt").to([m
+                 model.base_model.device[m
+             )[m
+[31m-            start_time = time.time()  # Record the start time[m
+[31m-            # with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof3:[m
+[31m-            #     with record_function("inference"):[m
+[32m+[m[41m            [m
+[32m+[m[32m            with profile(activities=activities, with_stack=True, with_flops=True, with_modules=True, profile_memory=True, record_shapes=True) as prof3:[m
+[32m+[m[32m                with record_function("inference"):[m
+ [m
+             # torch.cuda.memory._record_memory_history([m
+             #     max_entries=INT_MAX[m
+             # )[m
+[31m-                    [m
+[31m-            outputs = chatio.stream_output([m
+[31m-                model.medusa_generate([m
+[31m-                    input_ids,[m
+[31m-                    temperature=args.temperature,[m
+[31m-                    max_steps=32,[m
+[31m-                )[m
+[31m-            )[m
+[32m+[m[32m                    start_time = time.time()  # Record the start time[m
+[32m+[m[32m                    outputs = chatio.stream_output([m
+[32m+[m[32m                        model.medusa_generate([m
+[32m+[m[32m                            input_ids,[m
+[32m+[m[32m                            temperature=args.temperature,[m
+[32m+[m[32m                            max_steps=32,[m
+[32m+[m[32m                            context_len=0,[m
+[32m+[m[32m                        )[m
+[32m+[m[32m                    )[m
+[32m+[m[32m                    end_time = time.time()  # Record the end time[m
+             # Stop recording memory snapshot history.[m
+[31m-            end_time = time.time()  # Record the end time[m
+[32m+[m[41m            [m
+ [m
+             # torch.cuda.memory._record_memory_history(enabled=None)[m
+             # try:[m
+[36m@@ -167,14 +172,15 @@[m [mdef main(args):[m
+             # except Exception as e:[m
+             #     print(f"Failed to capture memory snapshot {e}")[m
+             [m
+[32m+[m[41m            [m
+             elapsed_time = end_time - start_time  # Calculate elapsed time[m
+             print(f"Elapsed time: {elapsed_time:.3f} seconds")[m
+             conv.update_last_message(outputs.strip())[m
+ [m
+[31m-            # with open(prof_file, 'w') as pf:[m
+[31m-            #     pf.write(prof1.key_averages().table())[m
+[31m-            #     pf.write(prof2.key_averages().table())[m
+[31m-            #     pf.write(prof3.key_averages().table())[m
+[32m+[m[32m            with open(prof_file, 'w') as pf:[m
+[32m+[m[32m                pf.write(prof1.key_averages().table())[m
+[32m+[m[32m                # pf.write(prof2.key_averages().table())[m
+[32m+[m[32m                pf.write(prof3.key_averages().table())[m
+ [m
+         except KeyboardInterrupt:[m
+             print("stopped generation.")[m
+[1mdiff --git a/medusa/model/kv_cache.py b/medusa/model/kv_cache.py[m
+[1mindex edb9956..d53da87 100644[m
+[1m--- a/medusa/model/kv_cache.py[m
+[1m+++ b/medusa/model/kv_cache.py[m
+[36m@@ -1,72 +1,17 @@[m
+ import torch[m
+[32m+[m[32mfrom dataclasses import dataclass[m
+[32m+[m[32mfrom typing import Any, Dict, List, Optional, Tuple, Union[m
+[32m+[m[32mfrom packaging import version[m
+[32m+[m[32mfrom transformers.utils import ([m
+[32m+[m[32m    logging,[m
+[32m+[m[32m)[m
+[32m+[m[32mfrom transformers.cache_utils import Cache, DynamicCache[m
+ [m
+ [m
+[31m-class KVCache:[m
+[31m-    """[m
+[31m-    A key-value cache for the model.[m
+ [m
+[31m-    This class provides a mechanism to maintain a growing cache of keys and values,[m
+[31m-    particularly useful for models that benefit from caching previous states,[m
+[31m-    like transformers during autoregressive decoding.[m
+[32m+[m[32mlogger = logging.get_logger(__name__)[m
+ [m
+[31m-    Attributes:[m
+[31m-        data (torch.Tensor): The tensor storing keys and values.[m
+[31m-        current_length (int): Current length of the data being stored.[m
+[31m-    """[m
+[31m-[m
+[31m-    def __init__(self, data, current_length):[m
+[31m-        """[m
+[31m-        Initialize the KVCache.[m
+[31m-[m
+[31m-        Args:[m
+[31m-            data (torch.Tensor): Initial tensor to store the keys and values.[m
+[31m-            current_length (int): Initial length of the data.[m
+[31m-        """[m
+[31m-        self.data = data[m
+[31m-        self.current_length = current_length[m
+[31m-[m
+[31m-    @property[m
+[31m-    def shape(self):[m
+[31m-        """Return the shape of the data tensor with updated length."""[m
+[31m-        return ([m
+[31m-            self.data.shape[0],[m
+[31m-            self.data.shape[1],[m
+[31m-            self.current_length.item(),[m
+[31m-            self.data.shape[3],[m
+[31m-        )[m
+[31m-[m
+[31m-    def copy(self, indices: torch.Tensor, prev_length: int, dim: int = 2):[m
+[31m-        """[m
+[31m-        Copy values from the current data at specified indices to a new location.[m
+[31m-[m
+[31m-        Args:[m
+[31m-            indices (torch.Tensor): Indices of the data tensor to be copied.[m
+[31m-            prev_length (int): Previous length before adding new data.[m
+[31m-            dim (int, optional): Dimension along which copying should be performed. Default is 2.[m
+[31m-        """[m
+[31m-        tgt = self.data.index_select(dim, indices)[m
+[31m-        dst = self.data.narrow(dim, prev_length, tgt.shape[dim])[m
+[31m-        dst.copy_(tgt, non_blocking=True)[m
+[31m-        self.current_length.fill_(prev_length + tgt.shape[dim])[m
+[31m-[m
+[31m-    def cat(self, tensor: torch.Tensor, dim: int = 2):[m
+[31m-        """[m
+[31m-        Concatenate the given tensor with the current data.[m
+[31m-[m
+[31m-        Args:[m
+[31m-            tensor (torch.Tensor): The tensor to be concatenated.[m
+[31m-            dim (int, optional): The dimension along which concatenation should be done. Default is 2.[m
+[31m-[m
+[31m-        Returns:[m
+[31m-            torch.Tensor: The data tensor after concatenation up to the current length.[m
+[31m-        """[m
+[31m-        dst = self.data.narrow(dim, self.current_length, tensor.shape[dim])[m
+[31m-        dst.copy_(tensor)[m
+[31m-        self.current_length.add_(tensor.shape[dim])[m
+[31m-        return torch.narrow(self.data, 2, 0, self.current_length)[m
+[31m-[m
+[31m-[m
+[31m-def initialize_past_key_values(model):[m
+[32m+[m[32mdef initialize_past_key_values(model, context_len):[m
+     """[m
+     Initialize past key and value states for a given transformer model.[m
+ [m
+[36m@@ -88,26 +33,31 @@[m [mdef initialize_past_key_values(model):[m
+     batch_size = 1[m
+     # Initializing a tensor to store past keys and values for all layers[m
+     past_key_values_data = torch.zeros([m
+[31m-        config.num_hidden_layers * 2,[m
+[31m-        batch_size,[m
+[31m-        config.num_key_value_heads,[m
+[31m-        config.max_position_embeddings,[m
+[31m-        config.hidden_size // config.num_attention_heads,[m
+[31m-        device=model.device,[m
+[31m-        dtype=model.dtype,[m
+[31m-    )[m
+[32m+[m[32m            config.num_hidden_layers * 2,[m
+[32m+[m[32m            batch_size,[m
+[32m+[m[32m            config.num_key_value_heads,[m
+[32m+[m[32m            0,[m
+[32m+[m[32m            config.hidden_size // config.num_attention_heads,[m
+[32m+[m[32m            device=model.device,[m
+[32m+[m[32m            dtype=model.dtype,[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m    print("context_len: ", context_len)[m
+[32m+[m[32m    print("max_position_embeddings:", config.max_position_embeddings)[m
+[32m+[m[32m    print("config.hidden_size // config.num_attention_heads:", config.hidden_size // config.num_attention_heads)[m
+     # Initialize tensor to store the current length of the cached data for all layers.[m
+     # [IMPORTANT] It needs to be kept on CPU for quick access and updates.[m
+     current_length_data = torch.zeros([m
+         config.num_hidden_layers * 2, dtype=torch.long, device="cpu"[m
+     )[m
+     # Creating a KVCache for each pair of key and value in all layers[m
+[31m-    past_key_values = [] * config.num_hidden_layers[m
+[32m+[m[32m    # past_key_values = DynamicCache(config.num_hidden_layers)[m
+[32m+[m[32m    past_key_values = DynamicCache()[m
+     for i in range(config.num_hidden_layers):[m
+[31m-        past_key_values.append([m
+[31m-            [[m
+[31m-                KVCache(past_key_values_data[i * 2 + j], current_length_data[i * 2 + j])[m
+[31m-                for j in range(2)[m
+[31m-            ][m
+[32m+[m[32m        past_key_values.update([m
+[32m+[m[32m            past_key_values_data[2*i ],[m
+[32m+[m[32m            past_key_values_data[2*i + 1],[m
+[32m+[m[32m            i[m
+         )[m
+[31m-    return past_key_values, past_key_values_data, current_length_data[m
+[32m+[m
+[32m+[m[32m    return past_key_values, past_key_values_data, current_length_data[m
+\ No newline at end of file[m
+[1mdiff --git a/medusa/model/medusa_model.py b/medusa/model/medusa_model.py[m
+[1mindex 573b6d5..5794d92 100644[m
+[1m--- a/medusa/model/medusa_model.py[m
+[1m+++ b/medusa/model/medusa_model.py[m
+[36m@@ -252,7 +252,8 @@[m [mclass MedusaModelABC(nn.Module):[m
+         posterior_alpha=0.3,[m
+         top_p=0.8, [m
+         sampling = 'typical', [m
+[31m-        fast = True[m
+[32m+[m[32m        fast = True,[m
+[32m+[m[32m        **kwargs,[m
+     ):[m
+         """[m
+         Args:[m
+[36m@@ -289,19 +290,25 @@[m [mclass MedusaModelABC(nn.Module):[m
+         self.medusa_buffers = medusa_buffers[m
+         self.medusa_choices = medusa_choices[m
+ [m
+[32m+[m[32m        context_len = kwargs.get("context_len", 2048)[m
+[32m+[m
+         # Initialize the past key and value states[m
+         if hasattr(self, "past_key_values"):[m
+             past_key_values = self.past_key_values[m
+[31m-            past_key_values_data = self.past_key_values_data[m
+[31m-            current_length_data = self.current_length_data[m
+[31m-            # Reset the past key and value states[m
+[31m-            current_length_data.zero_()[m
+[32m+[m[32m            print("already initialized here !!!")[m
+[32m+[m[32m            # past_key_values_data = self.past_key_values_data[m
+[32m+[m[32m            # # print(past_key_values_data.shape)[m
+[32m+[m[32m            # current_length_data = self.current_length_data[m
+[32m+[m[32m            # # print(current_length_data)[m
+[32m+[m[32m            # # Reset the past key and value states[m
+[32m+[m[32m            # current_length_data.zero_()[m
+[32m+[m[32m            # print(current_length_data)[m
+         else:[m
+             ([m
+[31m-                past_key_values,[m
+[32m+[m[32m                past_key_values,[m[41m [m
+                 past_key_values_data,[m
+[31m-                current_length_data,[m
+[31m-            ) = initialize_past_key_values(self.base_model)[m
+[32m+[m[32m                current_length_data[m
+[32m+[m[32m            ) = initialize_past_key_values(self.base_model, context_len)[m
+             self.past_key_values = past_key_values[m
+             self.past_key_values_data = past_key_values_data[m
+             self.current_length_data = current_length_data[m
+[36m@@ -317,8 +324,8 @@[m [mclass MedusaModelABC(nn.Module):[m
+         new_token = 0[m
+         last_round_token = 0[m
+ [m
+[31m-        for idx in range(5):[m
+[31m-            print("step #:", idx)[m
+[32m+[m[32m        for idx in range(max_steps):[m
+[32m+[m[32m            print("Step #", idx)[m
+ [m
+             # stream = torch.cuda.Stream()[m
+             # with torch.cuda.stream(stream):[m
+[36m@@ -338,6 +345,11 @@[m [mclass MedusaModelABC(nn.Module):[m
+                 sampling=sampling,[m
+                 fast=fast,[m
+             )[m
+[32m+[m[32m            x = self.tokenizer.decode([m
+[32m+[m[32m                    input_ids[0, input_len:],[m
+[32m+[m[32m                    skip_special_tokens=True,[m
+[32m+[m[32m                    spaces_between_special_tokens=False,[m
+[32m+[m[32m                    clean_up_tokenization_spaces=True,)[m
+ [m
+             # Use tree attention to verify the candidates and get predictions[m
+ [m
+[36m@@ -359,20 +371,21 @@[m [mclass MedusaModelABC(nn.Module):[m
+                 logits, candidates, temperature, posterior_threshold, posterior_alpha, top_p=top_p, sampling=sampling, fast=fast[m
+             )[m
+ [m
+[32m+[m[32m            with torch.inference_mode():[m
+             # Update the input_ids and logits[m
+[31m-            input_ids, logits, medusa_logits, new_token = update_inference_inputs([m
+[31m-                input_ids,[m
+[31m-                candidates,[m
+[31m-                best_candidate,[m
+[31m-                accept_length,[m
+[31m-                medusa_buffers["retrieve_indices"],[m
+[31m-                outputs,[m
+[31m-                logits,[m
+[31m-                medusa_logits,[m
+[31m-                new_token,[m
+[31m-                past_key_values_data,[m
+[31m-                current_length_data,[m
+[31m-            )[m
+[32m+[m[32m                input_ids, logits, medusa_logits, new_token = update_inference_inputs([m
+[32m+[m[32m                    input_ids,[m
+[32m+[m[32m                    candidates,[m
+[32m+[m[32m                    best_candidate,[m
+[32m+[m[32m                    accept_length,[m
+[32m+[m[32m                    medusa_buffers["retrieve_indices"],[m
+[32m+[m[32m                    outputs,[m
+[32m+[m[32m                    logits,[m
+[32m+[m[32m                    medusa_logits,[m
+[32m+[m[32m                    new_token,[m
+[32m+[m[32m                    past_key_values,[m
+[32m+[m[32m                    self.current_length_data,[m
+[32m+[m[32m                )[m
+ [m
+             yield {[m
+                 "text": self.tokenizer.decode([m
+[1mdiff --git a/medusa/model/modeling_llama_kv.py b/medusa/model/modeling_llama_kv.py[m
+[1mindex b2e001d..c8c0a71 100644[m
+[1m--- a/medusa/model/modeling_llama_kv.py[m
+[1m+++ b/medusa/model/modeling_llama_kv.py[m
+[36m@@ -14,7 +14,6 @@[m [mimport torch.utils.checkpoint[m
+ from torch import nn[m
+ from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss[m
+ [m
+[31m-# [MODIFIED] Import from transformer library[m
+ from transformers.activations import ACT2FN[m
+ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast[m
+ from transformers.modeling_utils import PreTrainedModel[m
+[36m@@ -30,13 +29,6 @@[m [mfrom transformers.models.llama.configuration_llama import LlamaConfig[m
+ from transformers.cache_utils import Cache, DynamicCache[m
+ [m
+ [m
+[31m-from snapkv.monkeypatch.snapkv_utils import init_snapkv[m
+[31m-[m
+[31m-# if is_flash_attn_available():[m
+[31m-#     from flash_attn import flash_attn_func, flash_attn_varlen_func[m
+[31m-#     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa[m
+[31m-[m
+[31m-[m
+ logger = logging.get_logger(__name__)[m
+ [m
+ _CONFIG_FOR_DOC = "LlamaConfig"[m
+[36m@@ -314,14 +306,14 @@[m [mclass LlamaAttention(nn.Module):[m
+         attention_mask: Optional[torch.Tensor] = None,[m
+         position_ids: Optional[torch.LongTensor] = None,[m
+         # past_key_value: Optional[Tuple[torch.Tensor]] = None,[m
+[31m-        past_key_value: Optional[Cache] = None,[m
+[32m+[m[32m        past_key_values: Optional[Cache] = None,[m
+         output_attentions: bool = False,[m
+         use_cache: bool = False,[m
+         padding_mask: Optional[torch.LongTensor] = None,[m
+     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:[m
+         [m
+         ########### [SnapKV][m
+[31m-        init_snapkv(self)[m
+[32m+[m[32m        # init_snapkv(self)[m
+         ########### [SnapKV][m
+ [m
+         bsz, q_len, _ = hidden_states.size()[m
+[36m@@ -352,9 +344,11 @@[m [mclass LlamaAttention(nn.Module):[m
+         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)[m
+         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)[m
+ [m
+[32m+[m[32m        # print("medusa heads:", self.num_heads)[m
+[32m+[m
+         kv_seq_len = key_states.shape[-2][m
+[31m-        if past_key_value is not None:[m
+[31m-            kv_seq_len += past_key_value[0].shape[-2][m
+[32m+[m[32m        if past_key_values is not None:[m
+[32m+[m[32m            kv_seq_len += past_key_values[self.layer_idx][0].shape[-2][m
+ [m
+ [m
+         ########### [SnapKV][m
+[36m@@ -373,23 +367,30 @@[m [mclass LlamaAttention(nn.Module):[m
+         # If past_key_value is available, reuse the states for k, v, and self_attention.[m
+ [m
+ [m
+[31m-        if past_key_value is not None:[m
+[32m+[m[32m        #print("kv_seq_len", kv_seq_len) #increases gradually[m
+[32m+[m[32m        #print("key_states.shape[-2]", key_states.shape[-2])[m
+[32m+[m[32m        if past_key_values is not None:[m
+             ########### [SnapKV][m
+             # if key_states.shape[-2] == kv_seq_len:[m
+[31m-            #     # print("Using Snapkv Right Now")[m
+[31m-            #     key_states_compress, value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states, attention_mask, self.num_key_value_groups)[m
+[32m+[m[32m            #      , value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states, attention_mask, self.num_key_value_groups)[m
+[32m+[m[32m            #     #print("snapkv called here for ", key_states.shape[-2], " and ", kv_seq_len)[m
+             #     _ = past_key_value[0].cat(key_states_compress, dim=2)[m
+             #     _ = past_key_value[1].cat(value_states_compress, dim=2)[m
+             # else:[m
+[31m-            key_states = past_key_value[0].cat(key_states, dim=2)[m
+[31m-            value_states = past_key_value[1].cat(value_states, dim=2)[m
+[32m+[m[32m            #     ##print("snapkv not called here for ", key_states.shape[-2], " and ", kv_seq_len)[m
+[32m+[m[32m            # key_states = past_key_value[0].cat(key_states, dim=2)[m
+[32m+[m[32m            # value_states = past_key_value[1].cat(value_states, dim=2)[m
+[32m+[m
+[32m+[m[32m            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)[m
+[32m+[m[32m            # print("key_states.shape", key_states.shape)[m
+[32m+[m[32m            # print("value_states.shape", value_states.shape)[m
+ [m
+             ########### [SnapKV][m
+ [m
+ [m
+ [m
+         # Reset past_key_value to avoid return past_key_value.[m
+[31m-        past_key_value = None[m
+[32m+[m[32m        #print("use_cache:", use_cache)[m
+ [m
+         # key_states = repeat_kv(key_states, self.num_key_value_groups)[m
+         # value_states = repeat_kv(value_states, self.num_key_value_groups)[m
+[36m@@ -433,7 +434,7 @@[m [mclass LlamaAttention(nn.Module):[m
+         if not output_attentions:[m
+             attn_weights = None[m
+ [m
+[31m-        return attn_output, attn_weights, past_key_value[m
+[32m+[m[32m        return attn_output, attn_weights, past_key_values[m
+ [m
+ [m
+ class LlamaFlashAttention2(LlamaAttention):[m
+[36m@@ -655,7 +656,7 @@[m [mclass LlamaDecoderLayer(nn.Module):[m
+         hidden_states: torch.Tensor,[m
+         attention_mask: Optional[torch.Tensor] = None,[m
+         position_ids: Optional[torch.LongTensor] = None,[m
+[31m-        past_key_value: Optional[Tuple[torch.Tensor]] = None,[m
+[32m+[m[32m        past_key_values: Optional[Cache] = None,[m
+         output_attentions: Optional[bool] = False,[m
+         use_cache: Optional[bool] = False,[m
+         padding_mask: Optional[torch.LongTensor] = None,[m
+[36m@@ -683,7 +684,7 @@[m [mclass LlamaDecoderLayer(nn.Module):[m
+             hidden_states=hidden_states,[m
+             attention_mask=attention_mask,[m
+             position_ids=position_ids,[m
+[31m-            past_key_value=past_key_value,[m
+[32m+[m[32m            past_key_values=past_key_values,[m
+             output_attentions=output_attentions,[m
+             use_cache=use_cache,[m
+             padding_mask=padding_mask,[m
+[36m@@ -889,7 +890,7 @@[m [mclass LlamaModel(LlamaPreTrainedModel):[m
+         input_ids: torch.LongTensor = None,[m
+         attention_mask: Optional[torch.Tensor] = None,[m
+         position_ids: Optional[torch.LongTensor] = None,[m
+[31m-        past_key_values=None,  # [MODIFIED] past_key_value is KVCache class[m
+[32m+[m[32m        past_key_values=Optional[Cache],  # [MODIFIED] past_key_value is KVCache class[m
+         inputs_embeds: Optional[torch.FloatTensor] = None,[m
+         use_cache: Optional[bool] = None,[m
+         output_attentions: Optional[bool] = None,[m
+[36m@@ -988,7 +989,7 @@[m [mclass LlamaModel(LlamaPreTrainedModel):[m
+                     hidden_states,[m
+                     attention_mask=attention_mask,[m
+                     position_ids=position_ids,[m
+[31m-                    past_key_value=past_key_value,[m
+[32m+[m[32m                    past_key_values=past_key_values,[m
+                     output_attentions=output_attentions,[m
+                     use_cache=use_cache,[m
+                     padding_mask=padding_mask,[m
+[36m@@ -1057,7 +1058,7 @@[m [mclass LlamaForCausalLM(LlamaPreTrainedModel):[m
+         input_ids: torch.LongTensor = None,[m
+         attention_mask: Optional[torch.Tensor] = None,[m
+         position_ids: Optional[torch.LongTensor] = None,[m
+[31m-        past_key_values=None,  # [MODIFIED] past_key_value is KVCache class[m
+[32m+[m[32m        past_key_values=Optional[Cache],  # [MODIFIED] past_key_value is KVCache class[m
+         inputs_embeds: Optional[torch.FloatTensor] = None,[m
+         labels: Optional[torch.LongTensor] = None,[m
+         use_cache: Optional[bool] = None,[m
+[36m@@ -1147,7 +1148,25 @@[m [mclass LlamaForCausalLM(LlamaPreTrainedModel):[m
+     def prepare_inputs_for_generation([m
+         self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs[m
+     ):[m
+[32m+[m[32m        print("-----Prepare Inputs-----")[m
+[32m+[m[32m        ########### [SnapKV][m
+[32m+[m[32m        if past_key_values is None:[m
+[32m+[m[32m            for layer in self.model.layers:[m
+[32m+[m[32m                layer.self_attn.kv_seq_len = 0[m
+[32m+[m[32m        ########### [SnapKV][m
+[32m+[m
+         if past_key_values:[m
+[32m+[m[32m            ########### [SnapKV][m
+[32m+[m[32m            if isinstance(past_key_values, Cache):[m
+[32m+[m[32m                cache_length = past_key_values.get_seq_length()[m
+[32m+[m[32m                past_length = past_key_values.seen_tokens[m
+[32m+[m[32m                max_cache_length = past_key_values.get_max_length()[m
+[32m+[m[32m            else:[m
+[32m+[m[32m                # cache_length = past_length = past_key_values[0][0].shape[2][m
+[32m+[m[32m                # max_cache_length = None[m
+[32m+[m[32m                cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len[m
+[32m+[m[32m                max_cache_length = None[m
+[32m+[m[32m            ########### [SnapKV][m
+             input_ids = input_ids[:, -1:][m
+             [m
+         position_ids = kwargs.get("position_ids", None)[m
+[36m@@ -1222,7 +1241,7 @@[m [mclass LlamaForSequenceClassification(LlamaPreTrainedModel):[m
+         input_ids: torch.LongTensor = None,[m
+         attention_mask: Optional[torch.Tensor] = None,[m
+         position_ids: Optional[torch.LongTensor] = None,[m
+[31m-        past_key_values: Optional[List[torch.FloatTensor]] = None,[m
+[32m+[m[32m        past_key_values: Optional[Cache] = None,[m
+         inputs_embeds: Optional[torch.FloatTensor] = None,[m
+         labels: Optional[torch.LongTensor] = None,[m
+         use_cache: Optional[bool] = None,[m
+[1mdiff --git a/medusa/model/modeling_llama_kv_new.py b/medusa/model/modeling_llama_kv_new.py[m
+[1mnew file mode 100644[m
+[1mindex 0000000..253e2bc[m
+[1m--- /dev/null[m
+[1m+++ b/medusa/model/modeling_llama_kv_new.py[m
+[36m@@ -0,0 +1,192 @@[m
+[32m+[m[32mimport torch[m
+[32m+[m[32mimport torch.nn as nn[m
+[32m+[m[32mimport torch.nn.functional as F[m
+[32m+[m[32mfrom typing import List, Optional, Tuple, Union[m
+[32m+[m[32mimport warnings[m
+[32m+[m[32mfrom transformers.cache_utils import Cache, DynamicCache[m
+[32m+[m[32mfrom transformers.models.llama.modeling_llama import ([m
+[32m+[m[32m    apply_rotary_pos_emb,[m
+[32m+[m[32m    repeat_kv,[m
+[32m+[m[32m)[m
+[32m+[m[32mfrom transformers.utils import ([m
+[32m+[m[32m    logging,[m
+[32m+[m[32m)[m
+[32m+[m
+[32m+[m[32mlogger = logging.get_logger(__name__)[m
+[32m+[m
+[32m+[m[32m# https://github.com/huggingface/transformers/blob/v4.37-release/src/transformers/models/llama/modeling_llama.py[m
+[32m+[m[32mdef llama_flash_attn2_forward([m
+[32m+[m[32m    self,[m
+[32m+[m[32m    hidden_states: torch.Tensor,[m
+[32m+[m[32m    attention_mask: Optional[torch.LongTensor] = None,[m
+[32m+[m[32m    position_ids: Optional[torch.LongTensor] = None,[m
+[32m+[m[32m    past_key_value: Optional[Cache] = None,[m
+[32m+[m[32m    output_attentions: bool = False,[m
+[32m+[m[32m    use_cache: bool = False,[m
+[32m+[m[32m    **kwargs,[m
+[32m+[m[32m) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:[m
+[32m+[m[32m    if "padding_mask" in kwargs:[m
+[32m+[m[32m        warnings.warn([m
+[32m+[m[32m            "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m        # overwrite attention_mask with padding_mask[m
+[32m+[m[32m        attention_mask = kwargs.pop("padding_mask")[m
+[32m+[m
+[32m+[m[32m    output_attentions = False[m
+[32m+[m
+[32m+[m[32m    bsz, q_len, _ = hidden_states.size()[m
+[32m+[m
+[32m+[m[32m    query_states = self.q_proj(hidden_states)[m
+[32m+[m[32m    key_states = self.k_proj(hidden_states)[m
+[32m+[m[32m    value_states = self.v_proj(hidden_states)[m
+[32m+[m
+[32m+[m[32m    # Flash attention requires the input to have the shape[m
+[32m+[m[32m    # batch_size x seq_length x head_dim x hidden_dim[m
+[32m+[m[32m    # therefore we just need to keep the original shape[m
+[32m+[m[32m    query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)[m
+[32m+[m[32m    key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)[m
+[32m+[m[32m    value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)[m
+[32m+[m[41m    [m
+[32m+[m[32m    kv_seq_len = key_states.shape[-2][m
+[32m+[m[32m    # if past_key_value is not None:[m
+[32m+[m[32m    #     kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)[m
+[32m+[m[32m    if past_key_value is not None:[m
+[32m+[m[32m        if self.layer_idx is None:[m
+[32m+[m[32m            raise ValueError([m
+[32m+[m[32m                f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "[m
+[32m+[m[32m                "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "[m
+[32m+[m[32m                "with a layer index."[m
+[32m+[m[32m            )[m
+[32m+[m[32m        if hasattr(self, "kv_seq_len"): #[SnapKV] add kv_seq_len[m
+[32m+[m[32m            if self.kv_seq_len != 0:[m
+[32m+[m[32m                kv_seq_len += self.kv_seq_len[m
+[32m+[m[32m            else:[m
+[32m+[m[32m                kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)[m
+[32m+[m
+[32m+[m[32m    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)[m
+[32m+[m[32m    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)[m
+[32m+[m[32m    # [SnapKV] move to ahead[m
+[32m+[m[32m    key_states = repeat_kv(key_states, self.num_key_value_groups)[m
+[32m+[m[32m    value_states = repeat_kv(value_states, self.num_key_value_groups)[m
+[32m+[m
+[32m+[m[32m    if past_key_value is not None:[m
+[32m+[m[32m        cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models[m
+[32m+[m[32m        # key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)[m
+[32m+[m[32m        # print('kv_seq_len:', kv_seq_len)[m
+[32m+[m[32m        # print('key_states.shape:', key_states.shape)[m
+[32m+[m[32m        # if key_states.shape[-2] == kv_seq_len: # [SnapKV] add kv_cluster[m
+[32m+[m[32m        #     self.kv_seq_len = kv_seq_len # [SnapKV] register kv_seq_len[m
+[32m+[m[32m        #     key_states_compress, value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states, attention_mask, self.num_key_value_groups)[m
+[32m+[m[32m        #     past_key_value.update(key_states_compress, value_states_compress, self.layer_idx, cache_kwargs)[m
+[32m+[m[32m        # else:[m
+[32m+[m[32m        self.kv_seq_len += q_len[m
+[32m+[m[32m        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)[m
+[32m+[m
+[32m+[m[32m    # TODO: These transpose are quite inefficient but Flash Attention requires the layout [batch_size, sequence_length, num_heads, head_dim]. We would need to refactor the KV cache[m
+[32m+[m[32m    # to be able to avoid many of these transpose/reshape/view.[m
+[32m+[m[32m    query_states = query_states.transpose(1, 2)[m
+[32m+[m[32m    key_states = key_states.transpose(1, 2)[m
+[32m+[m[32m    value_states = value_states.transpose(1, 2)[m
+[32m+[m
+[32m+[m[32m    dropout_rate = self.attention_dropout if self.training else 0.0[m
+[32m+[m
+[32m+[m[32m    # In PEFT, usually we cast the layer norms in float32 for training stability reasons[m
+[32m+[m[32m    # therefore the input hidden states gets silently casted in float32. Hence, we need[m
+[32m+[m[32m    # cast them back in the correct dtype just to be sure everything works as expected.[m
+[32m+[m[32m    # This might slowdown training & inference so it is recommended to not cast the LayerNorms[m
+[32m+[m[32m    # in fp32. (LlamaRMSNorm handles it correctly)[m
+[32m+[m
+[32m+[m[32m    input_dtype = query_states.dtype[m
+[32m+[m[32m    if input_dtype == torch.float32:[m
+[32m+[m[32m        if torch.is_autocast_enabled():[m
+[32m+[m[32m            target_dtype = torch.get_autocast_gpu_dtype()[m
+[32m+[m[32m        # Handle the case where the model is quantized[m
+[32m+[m[32m        elif hasattr(self.config, "_pre_quantization_dtype"):[m
+[32m+[m[32m            target_dtype = self.config._pre_quantization_dtype[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            target_dtype = self.q_proj.weight.dtype[m
+[32m+[m
+[32m+[m[32m        logger.warning_once([m
+[32m+[m[32m            f"The input hidden states seems to be silently casted in float32, this might be related to"[m
+[32m+[m[32m            f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"[m
+[32m+[m[32m            f" {target_dtype}."[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m        query_states = query_states.to(target_dtype)[m
+[32m+[m[32m        key_states = key_states.to(target_dtype)[m
+[32m+[m[32m        value_states = value_states.to(target_dtype)[m
+[32m+[m
+[32m+[m[32m    attn_output = self._flash_attention_forward([m
+[32m+[m[32m        query_states, key_states, value_states, attention_mask, q_len, dropout=dropout_rate[m
+[32m+[m[32m    )[m
+[32m+[m
+[32m+[m[32m    attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()[m
+[32m+[m[32m    attn_output = self.o_proj(attn_output)[m
+[32m+[m
+[32m+[m[32m    if not output_attentions:[m
+[32m+[m[32m        attn_weights = None[m
+[32m+[m
+[32m+[m[32m    return attn_output, attn_weights, past_key_value[m
+[32m+[m
+[32m+[m[32mdef prepare_inputs_for_generation_llama([m
+[32m+[m[32m    self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs[m
+[32m+[m[32m):[m
+[32m+[m[32m    if past_key_values is None: # [SnapKV][m
+[32m+[m[32m        for layer in self.model.layers:[m
+[32m+[m[32m            layer.self_attn.kv_seq_len = 0[m
+[32m+[m[32m    if past_key_values is not None:[m
+[32m+[m[32m        if isinstance(past_key_values, Cache):[m
+[32m+[m[32m            cache_length = past_key_values.get_seq_length()[m
+[32m+[m[32m            past_length = past_key_values.seen_tokens[m
+[32m+[m[32m            max_cache_length = past_key_values.get_max_length()[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            # cache_length = past_length = past_key_values[0][0].shape[2][m
+[32m+[m[32m            # max_cache_length = None[m
+[32m+[m[32m            cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len[m
+[32m+[m[32m            max_cache_length = None[m
+[32m+[m[32m        # Keep only the unprocessed tokens:[m
+[32m+[m[32m        # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where[m
+[32m+[m[32m        # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as[m
+[32m+[m[32m        # input)[m
+[32m+[m[32m        if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:[m
+[32m+[m[32m            input_ids = input_ids[:, -(attention_mask.shape[1] - past_length) :][m
+[32m+[m[32m        # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard[m
+[32m+[m[32m        # input_ids based on the past_length.[m
+[32m+[m[32m        elif past_length < input_ids.shape[1]:[m
+[32m+[m[32m            input_ids = input_ids[:, past_length:][m
+[32m+[m[32m        # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens.[m
+[32m+[m
+[32m+[m[32m        # If we are about to go beyond the maximum cache length, we need to crop the input attention mask.[m
+[32m+[m[32m        if ([m
+[32m+[m[32m            max_cache_length is not None[m
+[32m+[m[32m            and attention_mask is not None[m
+[32m+[m[32m            and cache_length + input_ids.shape[1] > max_cache_length[m
+[32m+[m[32m        ):[m
+[32m+[m[32m            attention_mask = attention_mask[:, -max_cache_length:][m
+[32m+[m
+[32m+[m[32m    position_ids = kwargs.get("position_ids", None)[m
+[32m+[m[32m    if attention_mask is not None and position_ids is None:[m
+[32m+[m[32m        # create position_ids on the fly for batch generation[m
+[32m+[m[32m        position_ids = attention_mask.long().cumsum(-1) - 1[m
+[32m+[m[32m        position_ids.masked_fill_(attention_mask == 0, 1)[m
+[32m+[m[32m        if past_key_values:[m
+[32m+[m[32m            position_ids = position_ids[:, -input_ids.shape[1] :][m
+[32m+[m
+[32m+[m[32m    # if `inputs_embeds` are passed, we only want to use them in the 1st generation step[m
+[32m+[m[32m    if inputs_embeds is not None and past_key_values is None:[m
+[32m+[m[32m        model_inputs = {"inputs_embeds": inputs_embeds}[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        model_inputs = {"input_ids": input_ids}[m
+[32m+[m
+[32m+[m[32m    model_inputs.update([m
+[32m+[m[32m        {[m
+[32m+[m[32m            "position_ids": position_ids,[m
+[32m+[m[32m            "past_key_values": past_key_values,[m
+[32m+[m[32m            "use_cache": kwargs.get("use_cache"),[m
+[32m+[m[32m            "attention_mask": attention_mask,[m
+[32m+[m[32m        }[m
+[32m+[m[32m    )[m
+[32m+[m[32m    return model_inputs[m
+[1mdiff --git a/medusa/model/monkeypatch.py b/medusa/model/monkeypatch.py[m
+[1mnew file mode 100644[m
+[1mindex 0000000..091126a[m
+[1m--- /dev/null[m
+[1m+++ b/medusa/model/monkeypatch.py[m
+[36m@@ -0,0 +1,16 @@[m
+[32m+[m[32mfrom importlib.metadata import version[m
+[32m+[m[32mimport warnings[m
+[32m+[m[32mimport transformers[m
+[32m+[m[32mfrom medusa.model.modeling_llama_kv import forward as llama_forward_4_46, prepare_inputs_for_generation_llama[m
+[32m+[m
+[32m+[m[32mdef check_version():[m
+[32m+[m[32m    try:[m
+[32m+[m[32m        transformers_version = version("transformers")[m
+[32m+[m[32m    except Exception as e:[m
+[32m+[m[32m        print(f"Transformers not installed: {e}")[m
+[32m+[m[32m    return transformers_version[m
+[32m+[m
+[32m+[m[32mdef replace_llama():[m
+[32m+[m[32m    transformers.models.llama.modeling_llama.LlamaForCausalLM.prepare_inputs_for_generation = prepare_inputs_for_generation_llama[m
+[32m+[m[32m    transformers.models.llama.modeling_llama.LlamaAttention.forward = llama_forward_4_46[m
+[32m+[m
+[1mdiff --git a/medusa/model/utils.py b/medusa/model/utils.py[m
+[1mindex a80f840..a20d12b 100644[m
+[1m--- a/medusa/model/utils.py[m
+[1m+++ b/medusa/model/utils.py[m
+[36m@@ -91,14 +91,17 @@[m [mdef generate_medusa_buffers(medusa_choices, device="cuda"):[m
+     # Generate retrieval indices for Medusa structure verification[m
+     retrieve_indices_nest = [][m
+     retrieve_paths = [][m
+[32m+[m[32m    print("sorted_medusa_choices:", sorted_medusa_choices)[m
+     for i in range(len(sorted_medusa_choices)):[m
+         cur_medusa_choice = sorted_medusa_choices[-i-1][m
+         retrieve_indice = [][m
+[32m+[m[32m        print("cur_medusa_choice:", cur_medusa_choice)[m
+         if cur_medusa_choice in retrieve_paths:[m
+             continue[m
+         else:[m
+             for c in range(len(cur_medusa_choice)):[m
+                 retrieve_indice.append(sorted_medusa_choices.index(cur_medusa_choice[:c+1]))[m
+[32m+[m[32m                print("retrieved_indice:", retrieve_indice[-1])[m
+                 retrieve_paths.append(cur_medusa_choice[:c+1])[m
+         retrieve_indices_nest.append(retrieve_indice)[m
+     max_length = max([len(x) for x in retrieve_indices_nest])[m
+[36m@@ -106,6 +109,7 @@[m [mdef generate_medusa_buffers(medusa_choices, device="cuda"):[m
+     retrieve_indices = torch.tensor(retrieve_indices, dtype=torch.long)[m
+     retrieve_indices = retrieve_indices + 1[m
+     retrieve_indices = torch.cat([torch.zeros((retrieve_indices.shape[0], 1), dtype=torch.long), retrieve_indices], dim=1)[m
+[32m+[m[32m    print("retrieve_indices padded:", retrieve_indices)[m
+ [m
+     # Aggregate the generated buffers into a dictionary[m
+     medusa_buffers = {[m
+[36m@@ -467,6 +471,7 @@[m [mdef evaluate_posterior([m
+         if accept_length == 0:[m
+             # Default to the first candidate if none are accepted[m
+             best_candidate = torch.tensor(0, dtype=torch.long, device=candidates.device)[m
+[32m+[m[32m            print("defaulting to the first candidate sequence")[m
+         else:[m
+             best_candidate = torch.argmax(candidates_accept_length).to(torch.long)[m
+         return best_candidate, accept_length[m
+[36m@@ -539,7 +544,7 @@[m [mdef update_inference_inputs([m
+     logits,[m
+     medusa_logits,[m
+     new_token,[m
+[31m-    past_key_values_data,[m
+[32m+[m[32m    past_key_values,[m
+     current_length_data,[m
+ ):[m
+     """[m
+[36m@@ -564,25 +569,48 @@[m [mdef update_inference_inputs([m
+     """[m
+     # Calculate the starting position for new tokens based on the previous input length[m
+     prev_input_len = input_ids.shape[1][m
+[32m+[m[32m    # print("prev_input_len", prev_input_len)[m
+[32m+[m[32m    # print("best_candidate", best_candidate)[m
+[32m+[m[32m    # print("accept_length", accept_length)[m
+[32m+[m[32m    # print("previous outputs", outputs)[m
+[32m+[m[32m    # print("retrieved_indices", retrieve_indices[best_candidate, : accept_length + 1])[m
+     # Map the best candidate indices to the original indices in the sequence[m
+     select_indices = ([m
+         retrieve_indices[best_candidate, : accept_length + 1] + prev_input_len[m
+     )[m
+[32m+[m[32m    # print("select_indices:" , select_indices)[m
+[32m+[m[32m    # print("len(select_indices)", len(select_indices))[m
+     # Append the tokens from the best candidate to the input sequence[m
+     input_ids = torch.cat([m
+         [input_ids, candidates[None, best_candidate, : accept_length + 1]], dim=-1[m
+     )[m
+[31m-    # Update the past key values based on the selected tokens[m
+[31m-    # Source tensor that contains relevant past information based on the selected candidate[m
+[31m-    tgt = past_key_values_data[..., select_indices, :][m
+[31m-    # Destination tensor where the relevant past information will be stored[m
+[31m-    dst = past_key_values_data[..., prev_input_len : prev_input_len + tgt.shape[-2], :][m
+[31m-    # Copy relevant past information from the source to the destination[m
+[31m-    dst.copy_(tgt, non_blocking=True)[m
+ [m
+[32m+[m[32m    # print("prev_input_len: ", prev_input_len)[m
+[32m+[m[32m    # print("select_indices: ", select_indices)[m
+[32m+[m[32m    # print("best_candidate: ", best_candidate)[m
+[32m+[m[32m    # print("accept_length: ", accept_length)[m
+[32m+[m[32m    # print("retrieve_indices: ", retrieve_indices[best_candidate])[m
+[32m+[m
+[32m+[m[32m    # for x in range(32) :[m
+[32m+[m[32m    #     keys = past_key_values[x][0][m
+[32m+[m[32m    #     values = past_key_values[x][1][m
+[32m+[m[32m    #     # print("keys.shape", keys.shape)[m
+[32m+[m[32m    #     # print("values.shape", values.shape)[m
+[32m+[m[41m       [m
+[32m+[m[32m    #     # print("select_indices", select_indices)[m
+[32m+[m[32m    #     tgt_keys = keys[..., select_indices, :][m
+[32m+[m[32m    #     tgt_values = values[..., select_indices, :][m
+[32m+[m
+[32m+[m[32m    #     dst_keys = keys[..., prev_input_len : prev_input_len + tgt_keys.shape[-2], :][m
+[32m+[m[32m    #     dst_values = values[..., prev_input_len : prev_input_len + tgt_values.shape[-2], :][m
+[32m+[m
+[32m+[m[32m    #     dst_keys.copy_(tgt_keys)[m
+[32m+[m[32m    #     dst_values.copy_(tgt_values)[m
+[32m+[m[41m        [m
+     # Update the current length tensor (currently only support batch size is 1)[m
+[31m-    current_length_data.fill_(prev_input_len + tgt.shape[-2])[m
+[31m-[m
+[32m+[m[32m    # current_length_data.fill_(prev_input_len + len(select_indices))[m
+[32m+[m[41m    [m
+[32m+[m[41m   [m
+     # Extract logits and medusa logits for the accepted tokens[m
+     logits = logits[None, best_candidate, accept_length : accept_length + 1][m
+     medusa_logits = medusa_logits[[m
+[1mdiff --git a/output.txt b/output.txt[m
+[1mindex 3522fd0..a2461b1 100644[m
+[1m--- a/output.txt[m
+[1m+++ b/output.txt[m
+[36m@@ -1,1943 +1,2155 @@[m
+[31m-LlamaForCausalLM has generative capabilities, as `prepare_inputs_for_generation` is explicitly overwritten. However, it doesn't directly inherit from `GenerationMixin`. From 👉v4.50👈 onwards, `PreTrainedModel` will NOT inherit from `GenerationMixin`, and this model will lose the ability to call `generate` and other related functions.[m
+[31m-  - If you're using `trust_remote_code=True`, you can get rid of this warning by loading the model with an auto class. See https://huggingface.co/docs/transformers/en/model_doc/auto#auto-classes[m
+[31m-  - If you are the owner of the model architecture code, please modify your model class such that it inherits from `GenerationMixin` (after `PreTrainedModel`, otherwise you'll get an exception).[m
+[31m-  - If you are not the owner of the model architecture class, please contact the model code owner to update it.[m
+[31m-You are using the default legacy behaviour of the <class 'transformers.models.llama.tokenization_llama.LlamaTokenizer'>. This is expected, and simply means that the `legacy` (previous) behavior will be used so nothing changes for you. If you want to use the new behaviour, set `legacy=False`. This should only be set if you understand what it means, and thoroughly read the reason why this was added as explained in https://github.com/huggingface/transformers/pull/24565 - if you loaded a llama tokenizer from a GGUF file you can ignore this message[m
+[31m-You are using the default legacy behaviour of the <class 'transformers.models.llama.tokenization_llama_fast.LlamaTokenizerFast'>. This is expected, and simply means that the `legacy` (previous) behavior will be used so nothing changes for you. If you want to use the new behaviour, set `legacy=False`. This should only be set if you understand what it means, and thoroughly read the reason why this was added as explained in https://github.com/huggingface/transformers/pull/24565 - if you loaded a llama tokenizer from a GGUF file you can ignore this message.[m
+ 9223372036854775807[m
+[31m-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:01<00:01,  1.77s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:02<00:00,  1.11s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:02<00:00,  1.21s/it][m
+[31m-Some weights of MedusaModelLlama were not initialized from the model checkpoint at lmsys/vicuna-7b-v1.3 and are newly initialized: ['medusa_head.0.0.linear.bias', 'medusa_head.0.0.linear.weight', 'medusa_head.0.1.weight', 'medusa_head.1.0.linear.bias', 'medusa_head.1.0.linear.weight', 'medusa_head.1.1.weight', 'medusa_head.2.0.linear.bias', 'medusa_head.2.0.linear.weight', 'medusa_head.2.1.weight', 'medusa_head.3.0.linear.bias', 'medusa_head.3.0.linear.weight', 'medusa_head.3.1.weight', 'medusa_head.4.0.linear.bias', 'medusa_head.4.0.linear.weight', 'medusa_head.4.1.weight'][m
+[31m-You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.[m
+[31m-/home/syildirim/Medusa/medusa/model/medusa_model.py:162: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.[m
+[31m-  medusa_head_state_dict = torch.load(filename, map_location=model.device)[m
+[31m-Token indices sequence length is longer than the specified maximum sequence length for this model (6773 > 2048). Running this sequence through the model will result in indexing errors[m
+ starting my prompter...[m
+[31m-fetched context from file: /home/syildirim/smart-kv/needle_in_a_haystack/PaulGrahamEssays/love.txt[m
+[31m-Context Length: 300[m
+[32m+[m[32mfetched context from file: /home/seliny2/smart-kv/needle_in_a_haystack/PaulGrahamEssays/bias.txt[m
+[32m+[m[32mContext Length: 500[m
+ Read the document and answer this question: What is the best thing to do in San Francisco?[m
+ The document:[m
+[31m-[m
+[31m-[m
+[31m-Want to start a startup?  Get funded by[m
+[31m-Y Combinator.[m
+[31m-[m
+[31m-[m
+[31m-[m
+[31m-[m
+[31m-January 2006To do something well you have to like it.   That idea is not exactly[m
+[31m-novel.  We've got it down to four words: "Do what you love."  But[m
+[31m-it's not enough just to tell people that.  Doing what you love is[m
+[31m-complicated.The very idea is foreign to what most of us learn as kids.  When I[m
+[31m-was a kid, it seemed as if work and fun were opposites by definition. [m
+[32m+[m[32mOctober 2015This will come as a surprise to a lot of people, but in some cases[m
+[32m+[m[32mit's possible to detect bias in a selection process without knowing[m
+[32m+[m[32manything about the applicant pool.  Which is exciting because among[m
+[32m+[m[32mother things it means third parties can use this technique to detect[m
+[32m+[m[32mbias whether those doing the selecting want them to or not.You can use this technique whenever (a) you have at least[m
+[32m+[m[32ma random sample of the applicants that were selected, (b) their[m
+[32m+[m[32msubsequent performance is measured, and (c) the groups of[m
+[32m+[m[32mapplicants you're comparing have roughly equal distribution of ability.How does it work?  Think about what it means to be biased.  What[m
+[32m+[m[32mit means for a selection process to be biased against applicants[m
+[32m+[m[32mof type x is that it's harder for them to make it through.  Which[m
+[32m+[m[32mmeans applicants of type x have to be better to get selected than[m
+[32m+[m[32mapplicants not of type x.[m[41m [m
+ The best thing to do in San Francisco is eat a sandwich and sit in Dolores Park on a sunny day.[m
+ [m
+[31m-Life had two states: some of the time adults were making you do[m
+[31m-things, and that was called work; the rest of the time you could[m
+[31m-do what you wanted, and that was called playing.  Occasionally the[m
+[31m-things adults made you do were fun, just as, occasionally, playing[m
+[31m-wasn't—for example, if you fell and hurt yourself.  But except[m
+[31m-for these few anomalous cases, work was pretty much defined as[m
+[31m-not-fun.And it did not seem to be an accident. School, it was implied, was[m
+[31m-tedious because it was preparation for grownup work.The world then was[m
+[32m+[m[32m[1][m
+[32m+[m[32mWhich means applicants of type x[m
+[32m+[m[32mwho do make it through the selection process will outperform other[m
+[32m+[m[32msuccessful applicants.  And if the performance of all the successful[m
+[32m+[m[32mapplicants is measured, you'll know if they do.Of course, the test you use to measure performance must be a valid[m
+[32m+[m[32mone.  And in particular it must not be invalidated by the bias you're[m
+[32m+[m[32mtrying to measure.[m
+[32m+[m[32mBut there are some domains where performance can be measured, and[m
+[32m+[m[32min those detecting bias is straightforward. Want to know if the[m
+[32m+[m[32mselection process was biased against some type of applicant?  Check[m
+[32m+[m[32mwhether they outperform the others.  This is not just a heuristic[m
+[32m+[m[32mfor detecting bias.  It's what bias means.For example, many suspect that venture capital firms are biased[m
+[32m+[m[32magainst female founders. This would be easy to detect: among their[m
+[32m+[m[32mportfolio companies, do startups with female founders outperform[m
+[32m+[m[32mthose without?  A couple months ago, one VC firm (almost certainly[m
+[32m+[m[32munintentionally) published a study showing bias of this type. First[m
+[32m+[m[32mRound Capital found that among its[m
+ [m
+[31m-ASSISTANT: ../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [64,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [65,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [66,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [67,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [68,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [69,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [70,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [71,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [72,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [73,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [74,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [75,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [76,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [77,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [78,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [79,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [80,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [81,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [82,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [83,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [84,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [85,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [86,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [87,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [88,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [89,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [90,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [91,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [92,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [93,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [94,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [14,0,0], thread: [95,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [64,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [65,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [66,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [67,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [68,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [69,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [70,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [71,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [72,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [73,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [74,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/IndexKernel.cu:93: operator(): block: [3,0,0], thread: [75,0,0] Assertion `-sizes[i] <= index && index < sizes[i] && "index out of bounds"` failed.[m
+[31m-../aten/src/ATen/native/cuda/I
