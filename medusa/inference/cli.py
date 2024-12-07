@@ -149,6 +149,7 @@ def main(args):
             prompt = conv.get_prompt()
 
             try:
+                print(f"Total time: {total_time:.3f} seconds")
                 chatio.prompt_for_output(conv.roles[1])
                 input_ids = tokenizer.encode(prompt, return_tensors="pt").to(
                     model.base_model.device
@@ -199,9 +200,7 @@ def main(args):
                         conv.messages.pop()
 
                     reload_conv(conv)
-            # except :
-            #     print(f"Total time: {total_time:.3f} seconds")
-            #     # print(response)
+            #     print(response)
             #     print("total generation len:", len(response))
             #     break
 

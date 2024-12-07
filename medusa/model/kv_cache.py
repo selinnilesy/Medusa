@@ -114,14 +114,15 @@ def initialize_past_key_values(model):
         config.num_hidden_layers * 2,
         batch_size,
         config.num_key_value_heads,
-        config.max_position_embeddings,
+        # config.max_position_embeddings,
+        20000,
         config.hidden_size // config.num_attention_heads,
         device=model.device,
         dtype=model.dtype,
     )
-    print(config.num_key_value_heads)
-    print(config.max_position_embeddings)
-    print(config.hidden_size // config.num_attention_heads)
+    # print(config.num_key_value_heads)
+    # print(config.max_position_embeddings)
+    # print(config.hidden_size // config.num_attention_heads)
     # Initialize tensor to store the current length of the cached data for all layers.
     # [IMPORTANT] It needs to be kept on CPU for quick access and updates.
     current_length_data = torch.zeros(

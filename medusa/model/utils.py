@@ -122,7 +122,7 @@ def generate_medusa_buffers(medusa_choices, device="cuda"):
     retrieve_indices = torch.tensor(retrieve_indices, dtype=torch.long)
     retrieve_indices = retrieve_indices + 1
     retrieve_indices = torch.cat([torch.zeros((retrieve_indices.shape[0], 1), dtype=torch.long), retrieve_indices], dim=1)
-    print("retrieve_indices: ", retrieve_indices)
+    # print("retrieve_indices: ", retrieve_indices)
 
     # Aggregate the generated buffers into a dictionary
     medusa_buffers = {
@@ -332,35 +332,35 @@ def generate_candidates(stepno, medusa_logits, logits, tree_indices, retrieve_in
 
     # Retrieve the cartesian candidates using the retrieve indices.
     cart_candidates = tree_candidates_ext[retrieve_indices]
-    # print("cart_candidates shape: ", cart_candidates.shape)
-    filtered_values = filtered_values_ext[retrieve_indices]
+    
+    
+    # filtered_values = filtered_values_ext[retrieve_indices]
 
-    # Create a heatmap
-    # Find which indices from topk.indices match the indexes_to_keep
-    filtered_values = filtered_values.detach().cpu()
-    # print("filtered_values shape: ", filtered_values.shape)
+    # # Create a heatmap
+    # # Find which indices from topk.indices match the indexes_to_keep
+    # filtered_values = filtered_values.detach().cpu()
+    # # print("filtered_values shape: ", filtered_values.shape)
 
-    # # Normalize the filtered values
-    # normalized_tensor = F.normalize(filtered_values, p=2, dim=1)  # Normalize along the rows (dim=1)
-    normalized_tensor = filtered_values / filtered_values.norm(dim=1)[:, None]
-    # # print("normalized_tensor shape: ", normalized_tensor.shape)
+    # # # Normalize the filtered values
+    # # normalized_tensor = F.normalize(filtered_values, p=2, dim=1)  # Normalize along the rows (dim=1)
+    # normalized_tensor = filtered_values / filtered_values.norm(dim=1)[:, None]
+    # # # print("normalized_tensor shape: ", normalized_tensor.shape)
 
-    # Compute pairwise cosine similarity for the normalized tensor
-    cosine_sim = torch.mm(normalized_tensor, normalized_tensor.transpose(0,1))
-    # print("cosine_sim: ", cosine_sim)  
+    # # Compute pairwise cosine similarity for the normalized tensor
+    # cosine_sim = torch.mm(normalized_tensor, normalized_tensor.transpose(0,1))
+    # # print("cosine_sim: ", cosine_sim)  
 
-    # Create the heatmap with larger elements
-    plt.figure(figsize=(12, 8), dpi=200)  # Increase figsize and dpi for larger heatmap
-    sns.heatmap(cosine_sim, annot=False, cmap="inferno", cbar=True, vmin=0, vmax=1, annot_kws={'size': 10})  # Adjust annotation size
+    # # Create the heatmap with larger elements
+    # plt.figure(figsize=(12, 8), dpi=200)  # Increase figsize and dpi for larger heatmap
+    # sns.heatmap(cosine_sim, annot=False, cmap="inferno", cbar=True, vmin=0, vmax=1, annot_kws={'size': 10})  # Adjust annotation size
 
+    # # # Set labels and title
+    # plt.title("Normalized Heatmap")
+    # plt.xlabel("Column")
+    # plt.ylabel("Row")
 
-    # # Set labels and title
-    plt.title("Normalized Heatmap")
-    plt.xlabel("Column")
-    plt.ylabel("Row")
-
-    # Show the plot
-    plt.savefig(f"similarity_matrix-{stepno}.png", dpi=300, bbox_inches="tight")
+    # # Show the plot
+    # plt.savefig(f"similarity_matrix-{stepno}.png", dpi=300, bbox_inches="tight")
 
     # Unsqueeze the tree candidates for dimension consistency.
     tree_candidates = tree_candidates.unsqueeze(0)  
@@ -550,7 +550,7 @@ def evaluate_posterior(
                 posterior_prob, dim=-1, index=candidates[:, 1:].unsqueeze(-1)
             ).squeeze(-1)
             # print("posterior_prob shape", posterior_prob.shape)
-            print("candidates_prob shape", candidates_prob.shape)
+            # print("candidates_prob shape", candidates_prob.shape)
             posterior_entropy = -torch.sum(
                 posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
             )  # torch.sum(torch.log(*)) is faster than torch.prod
