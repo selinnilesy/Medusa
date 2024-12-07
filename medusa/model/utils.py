@@ -328,7 +328,7 @@ def generate_candidates(stepno, medusa_logits, logits, tree_indices, retrieve_in
 
     # Extend the tree candidates by appending a zero.
     tree_candidates_ext = torch.cat([tree_candidates, torch.zeros((1), dtype=torch.long, device=tree_candidates.device)], dim=0)
-    filtered_values_ext = torch.cat([filtered_values, torch.zeros((1), dtype=torch.long, device=filtered_values.device)], dim=0)
+    #filtered_values_ext = torch.cat([filtered_values, torch.zeros((1), dtype=torch.long, device=filtered_values.device)], dim=0)
 
     # Retrieve the cartesian candidates using the retrieve indices.
     cart_candidates = tree_candidates_ext[retrieve_indices]
@@ -664,6 +664,11 @@ def update_inference_inputs(
     # Update the new token counter
     new_token += accept_length + 1
 
+    # Count nonzero elements
+    nonzero_count = torch.count_nonzero(past_key_values_data)
+    proportion_nonzero = nonzero_count / 10000
+    print(f"Non-zero elements: {nonzero_count}")
+    print(f"Proportion of tensor that is non-zero: {proportion_nonzero * 100:.2f}%")
     # print("final logits shape:", logits.shape)
     # print("final medusa_logits shape:", medusa_logits.shape)
 

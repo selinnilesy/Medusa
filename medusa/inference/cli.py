@@ -25,7 +25,6 @@ from medusa.model.medusa_model import MedusaModel
 # from medusa.model.monkeypatch import replace_llama
 import time
 import yaml
-from needle_in_a_haystack.prompt import Prompter
 
 INT_MAX = torch.iinfo(torch.int64).max
 
